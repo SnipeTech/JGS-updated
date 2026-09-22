@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Staff, Site, DailyLog, AppState, Customer, Product, Quotation, Invoice, Vendor, WorkEntry, Attendance, Supplier, MaterialRequest, Vehicle } from '@/types';
+import { Staff, Site, DailyLog, AppState, Customer, Product, Quotation, Invoice, Vendor, WorkEntry, Attendance, Supplier, MaterialRequest, Vehicle, MaterialRental } from '@/types';
 import { calculateDuration } from '@/lib/utils';
 import { format } from 'date-fns';
 
@@ -28,10 +28,9 @@ interface AppContextType extends AppState {
   addQuotation: (quotation: Omit<Quotation, 'id' | 'quotationNumber' | 'createdAt'>) => void;
   updateQuotation: (id: string, quotation: Partial<Quotation>) => void;
   deleteQuotation: (id: string) => void;
-  // Invoices
-  addInvoice: (invoice: Omit<Invoice, 'id' | 'invoiceNumber' | 'createdAt'>) => void;
-  updateInvoice: (id: string, invoice: Partial<Invoice>) => void;
-  deleteInvoice: (id: string) => void;
+  // Manual Expenses
+  addExpense: (expense: Omit<import('@/types').ManualExpense, 'id'>) => void;
+  deleteExpense: (id: string) => void;
   // Vendors
   addVendor: (vendor: Omit<Vendor, 'id'>) => void;
   deleteVendor: (id: string) => void;
@@ -43,6 +42,11 @@ interface AppContextType extends AppState {
   addMaterialSetting: (setting: Omit<import('@/types').MaterialSetting, 'id'>) => void;
   updateMaterialSetting: (id: string, setting: Partial<import('@/types').MaterialSetting>) => void;
   deleteMaterialSetting: (id: string) => void;
+  // Material Rentals
+  materialRentals: MaterialRental[];
+  addMaterialRental: (rental: Omit<MaterialRental, 'id' | 'createdAt'>) => void;
+  updateMaterialRental: (id: string, updates: Partial<MaterialRental>) => void;
+  deleteMaterialRental: (id: string) => void;
   // Suppliers
   addSupplier: (supplier: Omit<Supplier, 'id' | 'createdAt'>) => void;
   updateSupplier: (id: string, updates: Partial<Supplier>) => void;
@@ -57,6 +61,11 @@ interface AppContextType extends AppState {
   deleteMaterialRequest: (id: string) => void;
   assignMaterialRequest: (id: string, assignment: { driverId: string; driverName: string; supplierId: string; supplierName: string; vehicle?: string; vehicleNumber?: string; vehicleType?: string; startTime?: string; supplierPrice?: number; supplierPaidAmount?: number; supplierBalance?: number }) => void;
   completeMaterialRequest: (id: string, completion: { startTime?: string; endTime: string; completionTime?: string; duration?: string; durationHours?: number; driverWage?: number; driverHourlyRate?: number; items?: import('@/types').MaterialRequestItem[]; materialCost?: number; totalCost?: number; petrolCharge: number; completionNotes?: string; supplierPrice?: number; supplierPaidAmount?: number; supplierBalance?: number }) => void;
+  // Master Data
+  addLabourType: (type: string) => void;
+  removeLabourType: (type: string) => void;
+  addPaymentStageMaster: (stage: string) => void;
+  removePaymentStageMaster: (stage: string) => void;
   currentPortal: 'admin' | 'staff';
   switchPortal: (portal: 'admin' | 'staff') => void;
 }
@@ -154,40 +163,17 @@ const defaultState: AppState = {
   ],
   products: [],
   quotations: [],
-  invoices: [
-    {
-      id: 'inv_1',
-      invoiceNumber: 'INV-0001',
-      customerId: demoCustId,
-      customerName: 'John Abraham',
-      customerPhone: '9876543210',
-      siteId: demoSiteId,
-      siteName: 'Villa Renovation',
-      items: [
-        { productId: 'Design Consult', productName: 'Interior Design Fee', quantity: 1, rate: 25000, total: 25000 },
-        { productId: 'Adv Payment', productName: 'Advance Work Charges', quantity: 1, rate: 75000, total: 75000 }
-      ],
-      totalAmount: 100000,
-      paidAmount: 7000,
-      status: 'partial',
-      paymentType: 'partial',
-      partialDueDate: '2026-03-15',
-      paymentHistory: [
-        { id: 'ph_1', date: '2026-03-01', amount: 5000, mode: 'upi', note: 'Booking advance' },
-        { id: 'ph_2', date: '2026-03-04', amount: 2000, mode: 'cash', note: 'Material advance' }
-      ],
-      createdAt: new Date().toISOString(),
-      dueDate: '2026-03-30',
-      notes: 'Advance invoice for initial phase.'
-    }
-  ],
+  manualExpenses: [],
   vendors: [],
   workEntries: [],
   attendances: [],
   materialSettings: [
-    { id: 'ms_1', name: 'Cement', unit: 'Bags', perUnitWeight: '50kg' },
-    { id: 'ms_2', name: 'Jalli', unit: 'Tons', perUnitWeight: '1 Ton' },
-    { id: 'ms_3', name: 'Sand', unit: 'Tons', perUnitWeight: '1 Ton' },
+    { id: 'ms_1', name: 'Cement', unit: 'Bags', perUnitWeight: '50kg', defaultRate: 380, isRental: false },
+    { id: 'ms_2', name: 'Jalli', unit: 'Tons', perUnitWeight: '1 Ton', defaultRate: 1400, isRental: false },
+    { id: 'ms_3', name: 'Sand', unit: 'Tons', perUnitWeight: '1 Ton', defaultRate: 2200, isRental: false },
+    { id: 'ms_rental_1', name: 'Steel Scaffolding Set', unit: 'Sets', defaultRate: 40, isRental: true, rentalRatePerDay: 40 },
+    { id: 'ms_rental_2', name: 'Concrete Mixer Machine', unit: 'Nos', defaultRate: 500, isRental: true, rentalRatePerDay: 500 },
+    { id: 'ms_rental_3', name: 'Shuttering Plates (Iron)', unit: 'Nos', defaultRate: 15, isRental: true, rentalRatePerDay: 15 },
   ],
   suppliers: [
     { id: 'sup_1', name: 'Sri Murugan Hardwares', phone: '9842155667', address: 'Main Road, Kochi', materialsSupplied: 'Cement, Jalli, Sand', suppliedMaterials: ['Cement', 'Jalli', 'Sand'], createdAt: new Date().toISOString() },
@@ -199,6 +185,30 @@ const defaultState: AppState = {
     { id: 'veh_3', name: 'Tata Ace Gold', number: 'TN 38 M 8890', type: 'Mini Truck (Tata Ace)', createdAt: new Date().toISOString() }
   ],
   materialRequests: [],
+  labourTypes: ['painter', 'plumber', 'electrician', 'labour'],
+  paymentStageMaster: ['Level 1: Foundation', 'Level 2: Ground Floor Slab', 'Level 3: Plastering', 'Level 4: Finishing & Handover'],
+  materialRentals: [
+    {
+      id: 'rent_1',
+      materialId: 'ms_rental_1',
+      materialName: 'Steel Scaffolding Set',
+      siteId: demoSiteId,
+      siteName: 'Villa Renovation',
+      startDate: '2026-03-10',
+      quantity: 15,
+      unit: 'Sets',
+      requiresDriver: true,
+      driverId: demoStaffId,
+      driverName: 'Siddharth Staff',
+      vehicleId: 'veh_1',
+      vehicleNumber: 'TN 38 P 1024',
+      transitCost: 350,
+      rentalRatePerDay: 40,
+      status: 'active',
+      notes: 'Exterior plastering scaffolding deployment',
+      createdAt: '2026-03-10T09:00:00.000Z'
+    }
+  ],
   currentUser: null,
 };
 
@@ -237,7 +247,7 @@ function loadState(): AppState {
 
       if (state.staffList.length === 0) state.staffList = defaultState.staffList;
       if (state.customers.length === 0) state.customers = defaultState.customers;
-      if (state.invoices.length === 0) state.invoices = defaultState.invoices;
+      if (!state.manualExpenses) state.manualExpenses = [];
 
       if (!state.workEntries) state.workEntries = [];
       if (!state.attendances) state.attendances = [];
@@ -245,6 +255,8 @@ function loadState(): AppState {
       if (!state.suppliers || state.suppliers.length === 0) state.suppliers = defaultState.suppliers;
       if (!state.vehicles || state.vehicles.length === 0) state.vehicles = defaultState.vehicles;
       if (!state.materialRequests) state.materialRequests = [];
+      if (!state.labourTypes || state.labourTypes.length === 0) state.labourTypes = defaultState.labourTypes;
+      if (!state.materialRentals) state.materialRentals = defaultState.materialRentals;
 
       return state;
     }
@@ -265,12 +277,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const switchPortal = (portal: 'admin' | 'staff') => setCurrentPortal(portal);
 
   useEffect(() => {
-    saveState(state);
-  }, [state.staffList, state.sites, state.dailyLogs, state.customers, state.products, state.quotations, state.invoices, state.vendors, state.workEntries, state.attendances, state.materialSettings, state.suppliers, state.vehicles, state.materialRequests]);
+    localStorage.setItem('edamari_data', JSON.stringify(state));
+  }, [state.staffList, state.sites, state.dailyLogs, state.customers, state.products, state.quotations, state.manualExpenses, state.vendors, state.workEntries, state.attendances, state.materialSettings, state.suppliers, state.vehicles, state.materialRequests, state.labourTypes, state.materialRentals]);
 
   const login = (id: string, password: string): boolean => {
     if (id.trim() === 'admin' && password === ADMIN.password) {
-      setState(s => ({ ...s, currentUser: { id: 'admin', role: 'admin' } }));
+      setState(s => ({ ...s, currentUser: { id: 'admin', role: 'admin', adminPermissions: [] } }));
       setCurrentPortal('admin');
       return true;
     }
@@ -285,14 +297,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
     if (staff) {
       const userRole = staff.role === 'admin' ? 'admin' : 'staff';
-      setState(s => ({ ...s, currentUser: { id: staff.id, role: userRole } }));
+      setState(s => ({ ...s, currentUser: { id: staff.id, role: userRole, adminPermissions: staff.adminPermissions } }));
       setCurrentPortal(userRole === 'admin' ? 'admin' : 'staff');
       return true;
     }
     return false;
   };
 
-  const logout = () => setState(s => ({ ...s, currentUser: null }));
+  const logout = () => {
+    setState(s => ({ ...s, currentUser: null }));
+    // Clear Google Translate cookie to prevent admin page from translating
+    document.cookie = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    document.cookie = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=' + window.location.hostname;
+    setTimeout(() => {
+      window.location.reload();
+    }, 100);
+  };
 
   const addStaff = (staff: Omit<Staff, 'id'>) => {
     const id = 'staff_' + Date.now();
@@ -347,14 +367,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, quotations: s.quotations.map(x => x.id === id ? { ...x, ...updates } : x) }));
   const deleteQuotation = (id: string) => setState(s => ({ ...s, quotations: s.quotations.filter(x => x.id !== id) }));
 
-  const addInvoice = (invoice: Omit<Invoice, 'id' | 'invoiceNumber' | 'createdAt'>) => {
-    const id = 'inv_' + Date.now();
-    const invoiceNumber = 'INV-' + String(state.invoices.length + 1).padStart(4, '0');
-    setState(s => ({ ...s, invoices: [...s.invoices, { ...invoice, id, invoiceNumber, createdAt: new Date().toISOString() }] }));
+  const addExpense = (expense: Omit<import('@/types').ManualExpense, 'id'>) => {
+    const id = 'exp_' + Date.now();
+    setState(s => ({ ...s, manualExpenses: [...(s.manualExpenses || []), { ...expense, id }] }));
   };
-  const updateInvoice = (id: string, updates: Partial<Invoice>) =>
-    setState(s => ({ ...s, invoices: s.invoices.map(x => x.id === id ? { ...x, ...updates } : x) }));
-  const deleteInvoice = (id: string) => setState(s => ({ ...s, invoices: s.invoices.filter(x => x.id !== id) }));
+  const deleteExpense = (id: string) => setState(s => ({ ...s, manualExpenses: (s.manualExpenses || []).filter(x => x.id !== id) }));
 
   const addVendor = (vendor: Omit<Vendor, 'id'>) => {
     const id = 'vend_' + Date.now();
@@ -621,6 +638,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const addLabourType = (type: string) => {
+    setState(s => {
+      if (s.labourTypes.includes(type.toLowerCase())) return s;
+      return { ...s, labourTypes: [...s.labourTypes, type.toLowerCase()] };
+    });
+  };
+
+  const removeLabourType = (type: string) => {
+    setState(s => ({ ...s, labourTypes: s.labourTypes.filter(t => t !== type) }));
+  };
+
+  const addPaymentStageMaster = (stage: string) => {
+    setState(prev => ({
+      ...prev,
+      paymentStageMaster: [...prev.paymentStageMaster, stage]
+    }));
+  };
+
+  const removePaymentStageMaster = (stage: string) => {
+    setState(prev => ({
+      ...prev,
+      paymentStageMaster: prev.paymentStageMaster.filter(s => s !== stage)
+    }));
+  };
+
+  const addMaterialRental = (rental: Omit<MaterialRental, 'id' | 'createdAt'>) => {
+    const newRental: MaterialRental = {
+      ...rental,
+      id: `rent_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      createdAt: new Date().toISOString(),
+    };
+    setState(s => ({
+      ...s,
+      materialRentals: [newRental, ...(s.materialRentals || [])]
+    }));
+  };
+
+  const updateMaterialRental = (id: string, updates: Partial<MaterialRental>) => {
+    setState(s => ({
+      ...s,
+      materialRentals: (s.materialRentals || []).map(r => r.id === id ? { ...r, ...updates } : r)
+    }));
+  };
+
+  const deleteMaterialRental = (id: string) => {
+    setState(s => ({
+      ...s,
+      materialRentals: (s.materialRentals || []).filter(r => r.id !== id)
+    }));
+  };
+
   return (
     <AppContext.Provider value={{
       ...state,
@@ -631,15 +699,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addCustomer, deleteCustomer, updateCustomer,
       addProduct, deleteProduct,
       addQuotation, updateQuotation, deleteQuotation,
-      addInvoice, updateInvoice, deleteInvoice,
+      addExpense, deleteExpense,
       addVendor, deleteVendor,
       addWorkEntry,
       saveAttendance,
       addMaterialSetting, updateMaterialSetting, deleteMaterialSetting,
+      materialRentals: state.materialRentals || [],
+      addMaterialRental, updateMaterialRental, deleteMaterialRental,
       addSupplier, updateSupplier, deleteSupplier,
       addVehicle, updateVehicle, deleteVehicle,
       addMaterialRequest, updateMaterialRequest, deleteMaterialRequest,
       assignMaterialRequest, completeMaterialRequest,
+      addLabourType, removeLabourType,
+      addPaymentStageMaster, removePaymentStageMaster,
       currentPortal, switchPortal,
     }}>
       {children}

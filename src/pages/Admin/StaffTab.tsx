@@ -10,11 +10,12 @@ import { format } from 'date-fns';
 import {
   Users, Plus, UserCircle, PhoneCall, Trash2, PenLine, MapPin, Truck, ChevronDown, ChevronUp, Shield
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Staff } from '@/types';
 
 // ── Staff Detail View ─────────────────────────────────────
 export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: () => void }) => {
-  const { staffList, dailyLogs, updateStaff, deleteStaff } = useApp();
+  const { staffList, dailyLogs, updateStaff, deleteStaff, labourTypes } = useApp();
   const staff = staffList.find(s => s.id === staffId);
   const today = format(new Date(), 'yyyy-MM-dd');
 
@@ -186,10 +187,9 @@ export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: 
                   <SelectItem value="admin">Admin / Management</SelectItem>
                   <SelectItem value="supervisor">Supervisor</SelectItem>
                   <SelectItem value="driver">Driver (Admin Control)</SelectItem>
-                  <SelectItem value="labour">Labour</SelectItem>
-                  <SelectItem value="electrician">Electrician</SelectItem>
-                  <SelectItem value="painter">Painter</SelectItem>
-                  <SelectItem value="plumber">Plumber</SelectItem>
+                  {labourTypes.map(lt => (
+                    <SelectItem key={lt} value={lt}>{lt}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -211,20 +211,22 @@ export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: 
               </div>
             )}
 
-            <div>
-              <Label className="text-xs font-semibold text-muted-foreground">Salary Basis Option *</Label>
-              <Select value={eSalaryType} onValueChange={(val: 'daily' | 'hourly') => setESalaryType(val)}>
-                <SelectTrigger className="mt-1 h-10 rounded-xl">
-                  <SelectValue placeholder="Select Basis" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="daily">Day-Based Salary (₹/day)</SelectItem>
-                  <SelectItem value="hourly">Hourly-Based Salary (₹/hr)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {eRole !== 'driver' && (
+              <div>
+                <Label className="text-xs font-semibold text-muted-foreground">Salary Basis Option *</Label>
+                <Select value={eSalaryType} onValueChange={(val: 'daily' | 'hourly') => setESalaryType(val)}>
+                  <SelectTrigger className="mt-1 h-10 rounded-xl">
+                    <SelectValue placeholder="Select Basis" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Day-Based Salary (₹/day)</SelectItem>
+                    <SelectItem value="hourly">Hourly-Based Salary (₹/hr)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
-            {eSalaryType === 'daily' ? (
+            {eSalaryType === 'daily' || eRole === 'driver' ? (
               <div>
                 <Label className="text-xs font-semibold text-muted-foreground">Per Day Salary (₹)</Label>
                 <Input
@@ -246,20 +248,7 @@ export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: 
               </div>
             )}
 
-            {eRole === 'driver' && (
-              <div className="sm:col-span-2 p-3 rounded-xl bg-primary/5 border border-primary/20 space-y-1">
-                <Label className="text-xs font-bold text-primary flex items-center gap-1.5">
-                  <Truck className="w-3.5 h-3.5" /> Driver Hourly Customer Pay / Transit Billing (₹/hr) *
-                </Label>
-                <Input
-                  type="number"
-                  value={eCustomerHourlyRate}
-                  onChange={e => setECustomerHourlyRate(e.target.value)}
-                  placeholder="e.g. 150"
-                  className="mt-1 h-10 rounded-xl"
-                />
-              </div>
-            )}
+
 
             {eRole === 'supervisor' && (
               <>
@@ -363,7 +352,7 @@ export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: 
 
 // ── Staff Tab Main Component ──────────────────────────────
 export const StaffTab = () => {
-  const { staffList, addStaff, deleteStaff } = useApp();
+  const { staffList, addStaff, deleteStaff, labourTypes } = useApp();
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [role, setRole] = useState('supervisor');
@@ -382,6 +371,7 @@ export const StaffTab = () => {
   const [show, setShow] = useState(false);
   const [selectedStaffId, setSelectedStaffId] = useState<string | null>(null);
   const [expandedSupervisors, setExpandedSupervisors] = useState<string[]>([]);
+  const { t } = useTranslation();
 
   if (selectedStaffId) {
     return <StaffDetailView staffId={selectedStaffId} onBack={() => setSelectedStaffId(null)} />;
@@ -433,7 +423,7 @@ export const StaffTab = () => {
   return (
     <div className="space-y-4 animate-slide-up">
       <div className="flex items-center justify-between">
-        <h3 className="section-header">Staff & Supervisors</h3>
+        <h3 className="section-header">{t('staff.staffAndSupervisors')}</h3>
         <Button
           size="sm"
           onClick={() => setShow(v => !v)}
@@ -515,20 +505,22 @@ export const StaffTab = () => {
                 </div>
               )}
 
-              <div>
-                <Label className="text-xs font-semibold text-muted-foreground">Salary Basis Option *</Label>
-                <Select value={salaryType} onValueChange={(val: 'daily' | 'hourly') => setSalaryType(val)}>
-                  <SelectTrigger className="mt-1 h-10 rounded-xl text-xs">
-                    <SelectValue placeholder="Select Basis" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="daily">Day-Based Salary (₹/day)</SelectItem>
-                    <SelectItem value="hourly">Hourly-Based Salary (₹/hr)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {role !== 'driver' && (
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Salary Basis Option *</Label>
+                  <Select value={salaryType} onValueChange={(val: 'daily' | 'hourly') => setSalaryType(val)}>
+                    <SelectTrigger className="mt-1 h-10 rounded-xl text-xs">
+                      <SelectValue placeholder="Select Basis" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="daily">Day-Based Salary (₹/day)</SelectItem>
+                      <SelectItem value="hourly">Hourly-Based Salary (₹/hr)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
-              {salaryType === 'daily' ? (
+              {salaryType === 'daily' || role === 'driver' ? (
                 <div>
                   <Label className="text-xs font-semibold text-muted-foreground">Per Day Salary (₹)</Label>
                   <Input
@@ -552,20 +544,7 @@ export const StaffTab = () => {
                 </div>
               )}
 
-              {role === 'driver' && (
-                <div className="sm:col-span-2 p-3 rounded-xl bg-primary/5 border border-primary/20 space-y-1">
-                  <Label className="text-xs font-bold text-primary flex items-center gap-1.5">
-                    <Truck className="w-3.5 h-3.5" /> Driver Hourly Customer Pay / Transit Billing (₹/hr) *
-                  </Label>
-                  <Input
-                    type="number"
-                    placeholder="e.g. 150"
-                    value={customerHourlyRate}
-                    onChange={e => setCustomerHourlyRate(e.target.value)}
-                    className="mt-1 h-10 rounded-xl text-xs font-semibold"
-                  />
-                </div>
-              )}
+
 
               {role === 'supervisor' && (
                 <>

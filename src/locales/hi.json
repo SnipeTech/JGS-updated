@@ -1,0 +1,43 @@
+{
+  "sidebar": {
+    "dashboard": "डैशबोर्ड",
+    "sites": "साइट्स (Sites)",
+    "materials": "सामग्री और आपूर्तिकर्ता",
+    "settings": "सेटिंग्स (Settings)",
+    "payroll": "वेतन (Payroll)",
+    "staff": "कर्मचारी (Staff)",
+    "attendance": "उपस्थिति (Attendance)",
+    "customers": "ग्राहक",
+    "reports": "रिपोर्ट (Reports)",
+    "logout": "लॉग आउट"
+  },
+  "dashboard": {
+    "activeSites": "सक्रिय साइट्स",
+    "totalStaff": "कुल कर्मचारी",
+    "clientAccounts": "ग्राहक खाते",
+    "pendingInvoices": "लंबित चालान",
+    "actionRequired": "कार्रवाई आवश्यक"
+  },
+  "sites": {
+    "siteManagement": "साइट प्रबंधन",
+    "activeSites": "सक्रिय साइट्स"
+  },
+  "staff": {
+    "staffAndSupervisors": "कर्मचारी और पर्यवेक्षक"
+  },
+  "attendance": {
+    "dailyAttendance": "दैनिक उपस्थिति और ओवरटाइम"
+  },
+  "staffSidebar": {
+    "workEntry": "काम की प्रविष्टि",
+    "materialRequest": "सामग्री का अनुरोध",
+    "workHistory": "कार्य इतिहास",
+    "thisWeek": "इस सप्ताह",
+    "teamAttendance": "टीम की उपस्थिति",
+    "mySalary": "मेरा वेतन"
+  },
+  "common": {
+    "selectLanguage": "भाषा",
+    "welcome": "वापसी पर स्वागत है"
+  }
+}

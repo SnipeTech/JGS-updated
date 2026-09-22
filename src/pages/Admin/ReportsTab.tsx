@@ -14,7 +14,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 export const ReportsTab = () => {
-  const { dailyLogs, sites, invoices, materialRequests, staffList, attendances } = useApp();
+  const { dailyLogs, sites, manualExpenses, materialRequests, staffList, attendances, addExpense, deleteExpense } = useApp();
 
   const [selectedSiteId, setSelectedSiteId] = useState('all');
   const [fromDate, setFromDate] = useState(
@@ -23,6 +23,28 @@ export const ReportsTab = () => {
   const [toDate, setToDate] = useState(
     format(endOfMonth(new Date()), 'yyyy-MM-dd')
   );
+
+  // Manual Expense Form State
+  const [expenseSiteId, setExpenseSiteId] = useState('');
+  const [expenseDate, setExpenseDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseCategory, setExpenseCategory] = useState('');
+  const [expenseDescription, setExpenseDescription] = useState('');
+
+  const handleAddExpense = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!expenseDate || !expenseAmount || !expenseCategory) return;
+    addExpense({
+      siteId: expenseSiteId,
+      siteName: expenseSiteId ? sites.find(s => s.id === expenseSiteId)?.name : 'Office / General',
+      date: expenseDate,
+      amount: Number(expenseAmount),
+      category: expenseCategory,
+      description: expenseDescription
+    });
+    setExpenseAmount('');
+    setExpenseDescription('');
+  };
 
   // Quick period presets
   const applyPreset = (type: 'this_month' | 'last_month' | 'this_year') => {
@@ -59,15 +81,15 @@ export const ReportsTab = () => {
     });
   }, [materialRequests, fromDate, toDate, selectedSiteId]);
 
-  // Filtered invoices (only when viewing all sites or specific site if applicable)
-  const filteredInvoices = useMemo(() => {
-    return (invoices || []).filter(inv => {
-      const invDate = (inv.createdAt || '').split('T')[0];
-      const inDate = invDate >= fromDate && invDate <= toDate;
-      const inSite = selectedSiteId === 'all' || (inv as any).siteId === selectedSiteId;
+  // Filtered manual expenses
+  const filteredManualExpenses = useMemo(() => {
+    return (manualExpenses || []).filter(e => {
+      const eDate = e.date || '';
+      const inDate = eDate >= fromDate && eDate <= toDate;
+      const inSite = selectedSiteId === 'all' || e.siteId === selectedSiteId;
       return inDate && inSite;
     });
-  }, [invoices, fromDate, toDate, selectedSiteId]);
+  }, [manualExpenses, fromDate, toDate, selectedSiteId]);
 
   // 1. INCOMES
   // A) Direct Client Receipts from Daily Logs
@@ -75,12 +97,7 @@ export const ReportsTab = () => {
     return filteredLogs.reduce((sum, l) => sum + (l.incomeFromClient || 0), 0);
   }, [filteredLogs]);
 
-  // B) Invoice Payments Collected
-  const invoicePaymentsCollected = useMemo(() => {
-    return filteredInvoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
-  }, [filteredInvoices]);
-
-  const totalInflow = directClientIncome + invoicePaymentsCollected;
+  const totalInflow = directClientIncome;
 
   // 2. EXPENSES
   // A) Materials Expense (daily logs + store & supplier requisitions)
@@ -146,8 +163,12 @@ export const ReportsTab = () => {
     }, 0);
   }, [staffList, attendances, fromDate, toDate, selectedSiteId]);
 
+  const totalManualExpense = useMemo(() => {
+    return filteredManualExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+  }, [filteredManualExpenses]);
+
   // Total Outflow
-  const totalOutflow = totalMaterialsExpense + totalTransportExpense + totalMiscExpense + totalPayrollExpense;
+  const totalOutflow = totalMaterialsExpense + totalTransportExpense + totalMiscExpense + totalPayrollExpense + totalManualExpense;
 
   // 3. NET PROFIT OR LOSS
   const netProfitLoss = totalInflow - totalOutflow;
@@ -203,7 +224,6 @@ export const ReportsTab = () => {
     const incHead = [['Income Source', 'Amount (Rs)', 'Share %']];
     const incBody = [
       ['Direct Client Site Income (Work Entries)', directClientIncome.toLocaleString(), totalInflow > 0 ? `${((directClientIncome / totalInflow) * 100).toFixed(1)}%` : '0%'],
-      ['Customer Invoices Paid', invoicePaymentsCollected.toLocaleString(), totalInflow > 0 ? `${((invoicePaymentsCollected / totalInflow) * 100).toFixed(1)}%` : '0%'],
       ['TOTAL INFLOW', totalInflow.toLocaleString(), '100%']
     ];
 
@@ -239,6 +259,7 @@ export const ReportsTab = () => {
       ['Staff Payroll & Labor Wages', totalPayrollExpense.toLocaleString(), totalOutflow > 0 ? `${((totalPayrollExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Supervisor, Driver & Crew payroll'],
       ['Transport, Transit & Petrol', totalTransportExpense.toLocaleString(), totalOutflow > 0 ? `${((totalTransportExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Daily travel + Driver dispatches & fuel'],
       ['Site Incidentals & Miscellaneous', totalMiscExpense.toLocaleString(), totalOutflow > 0 ? `${((totalMiscExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Food, tea, site tools & misc'],
+      ['Manual General Expenses', totalManualExpense.toLocaleString(), totalOutflow > 0 ? `${((totalManualExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Office rent, tools, custom entries'],
       ['TOTAL EXPENSES', totalOutflow.toLocaleString(), '100%', 'All operational expenditures']
     ];
 
@@ -426,7 +447,7 @@ export const ReportsTab = () => {
             ₹{totalInflow.toLocaleString()}
           </p>
           <p className="text-[11px] text-muted-foreground">
-            Site payments + Invoices
+            Site work payments
           </p>
         </Card>
 
@@ -488,14 +509,6 @@ export const ReportsTab = () => {
               <span className="font-bold text-sm text-emerald-600">₹{directClientIncome.toLocaleString()}</span>
             </div>
 
-            <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-muted/40">
-              <div>
-                <span className="font-semibold text-foreground block">Customer Invoices Collected</span>
-                <span className="text-[10px] text-muted-foreground">Paid amount from customer invoices</span>
-              </div>
-              <span className="font-bold text-sm text-emerald-600">₹{invoicePaymentsCollected.toLocaleString()}</span>
-            </div>
-
             <div className="flex justify-between items-center pt-2 border-t border-border/50 font-bold">
               <span>Total Revenue / Inflow:</span>
               <span className="text-base text-emerald-600 font-heading">₹{totalInflow.toLocaleString()}</span>
@@ -543,12 +556,110 @@ export const ReportsTab = () => {
               <span className="font-bold text-sm text-destructive">₹{totalMiscExpense.toLocaleString()}</span>
             </div>
 
+            <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-muted/40">
+              <div>
+                <span className="font-semibold text-foreground block">Manual General Expenses</span>
+                <span className="text-[10px] text-muted-foreground">Custom/office expenses</span>
+              </div>
+              <span className="font-bold text-sm text-destructive">₹{totalManualExpense.toLocaleString()}</span>
+            </div>
+
             <div className="flex justify-between items-center pt-2 border-t border-border/50 font-bold">
               <span>Total Outflow / Cost:</span>
               <span className="text-base text-destructive font-heading">₹{totalOutflow.toLocaleString()}</span>
             </div>
           </div>
         </Card>
+      </div>
+
+      {/* Manual Expenses Section */}
+      <div className="mt-8 space-y-4">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          <Wallet className="w-4 h-4" /> Manual General Expenses
+        </h3>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card className="p-5 rounded-2xl bg-card border border-border/50 shadow-sm lg:col-span-1 h-fit">
+            <h4 className="font-heading font-bold text-sm mb-4">Record New Expense</h4>
+            <form onSubmit={handleAddExpense} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Date</Label>
+                <Input type="date" value={expenseDate} onChange={e => setExpenseDate(e.target.value)} required className="h-9 text-xs" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Category</Label>
+                <Select value={expenseCategory} onValueChange={setExpenseCategory} required>
+                  <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Select Category" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Office Rent">Office Rent</SelectItem>
+                    <SelectItem value="Travel & Fuel">Travel & Fuel</SelectItem>
+                    <SelectItem value="Tools & Equipment">Tools & Equipment</SelectItem>
+                    <SelectItem value="Utilities & Bills">Utilities & Bills</SelectItem>
+                    <SelectItem value="Other/Misc">Other/Misc</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Amount (₹)</Label>
+                <Input type="number" value={expenseAmount} onChange={e => setExpenseAmount(e.target.value)} required min="1" className="h-9 text-xs" placeholder="e.g. 500" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Description</Label>
+                <Input value={expenseDescription} onChange={e => setExpenseDescription(e.target.value)} className="h-9 text-xs" placeholder="What was this for?" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Assign to Site (Optional)</Label>
+                <Select value={expenseSiteId} onValueChange={setExpenseSiteId}>
+                  <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Office / General (No Site)" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value=" ">Office / General (No Site)</SelectItem>
+                    {sites.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button type="submit" className="w-full h-9 text-xs font-bold rounded-xl mt-2">Add Expense</Button>
+            </form>
+          </Card>
+
+          <Card className="p-5 rounded-2xl bg-card border border-border/50 shadow-sm lg:col-span-2">
+            <h4 className="font-heading font-bold text-sm mb-4">Recorded Expenses ({filteredManualExpenses.length})</h4>
+            {filteredManualExpenses.length === 0 ? (
+              <div className="text-center py-10 bg-muted/20 rounded-xl text-muted-foreground text-xs border border-dashed border-border/50">
+                No manual expenses recorded for this period.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredManualExpenses.map((exp) => (
+                  <div key={exp.id} className="flex flex-col sm:flex-row justify-between p-3 bg-muted/30 rounded-xl border border-border/50 gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-foreground">{exp.category}</span>
+                        <span className="text-[10px] text-muted-foreground font-mono bg-background px-1.5 py-0.5 rounded border border-border/30">
+                          {format(new Date(exp.date), 'dd MMM yyyy')}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-1.5">
+                        {exp.description || 'No description'}
+                      </p>
+                      {exp.siteName && exp.siteName !== 'Office / General' && (
+                        <div className="text-[10px] text-primary/80 font-bold mt-1 flex items-center gap-1">
+                          <MapPin className="w-3 h-3" /> {exp.siteName}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-3">
+                      <span className="font-bold text-destructive">₹{exp.amount.toLocaleString()}</span>
+                      <Button variant="ghost" size="sm" onClick={() => deleteExpense(exp.id)} className="h-6 px-2 text-[10px] text-destructive hover:text-destructive hover:bg-destructive/10 rounded-lg">
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
       </div>
     </div>
   );

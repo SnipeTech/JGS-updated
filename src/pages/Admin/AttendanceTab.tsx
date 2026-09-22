@@ -10,13 +10,25 @@ import {
   CalendarDays, Clock, Users, UserCircle, Truck, ChevronLeft, ChevronRight,
   Plus, Minus, AlertCircle
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Staff, Attendance } from '@/types';
 
 export const AttendanceTab = () => {
-  const { staffList, attendances, saveAttendance } = useApp();
+  const { staffList, attendances, materialRequests, saveAttendance, currentUser } = useApp();
+  const { t } = useTranslation();
   const [view, setView] = useState<'daily' | 'history'>('daily');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [historyStaffId, setHistoryStaffId] = useState<string>('all');
+
+  const getAdminEditProps = (existing?: Attendance) => {
+    if (existing?.isSubmitted) {
+      return {
+        editedByAdmin: true,
+        editedByAdminName: currentUser?.role === 'admin' ? 'Administrator' : 'Admin'
+      };
+    }
+    return {};
+  };
 
   const handleAttendanceChange = (staffId: string, updates: Partial<Attendance>) => {
     const existing = (attendances || []).find(a => a.staffId === staffId && a.date === date);
@@ -25,7 +37,8 @@ export const AttendanceTab = () => {
       date,
       status: existing?.status || 'present',
       ...existing,
-      ...updates
+      ...updates,
+      ...getAdminEditProps(existing)
     });
   };
 
@@ -40,7 +53,8 @@ export const AttendanceTab = () => {
       date,
       status: existing?.status || 'present',
       ...existing,
-      presentCounts
+      presentCounts,
+      ...getAdminEditProps(existing)
     });
   };
 
@@ -51,7 +65,8 @@ export const AttendanceTab = () => {
       date,
       status: existing?.status || 'present',
       ...existing,
-      unnamedOtHours: Math.max(0, otHours)
+      unnamedOtHours: Math.max(0, otHours),
+      ...getAdminEditProps(existing)
     });
   };
 
@@ -62,7 +77,8 @@ export const AttendanceTab = () => {
       date,
       status: existing?.status || 'present',
       ...existing,
-      unnamedOtStaffCount: Math.max(0, count)
+      unnamedOtStaffCount: Math.max(0, count),
+      ...getAdminEditProps(existing)
     });
   };
 
@@ -119,6 +135,15 @@ export const AttendanceTab = () => {
       ot,
       total: regular + ot
     };
+  };
+
+  const calcDriverTransit = (driverId: string, logDate: string) => {
+    const trips = (materialRequests || []).filter(
+      r => r.driverId === driverId && r.date === logDate && r.status === 'completed'
+    );
+    const count = trips.length;
+    const transitWages = trips.reduce((sum, r) => sum + (Number(r.driverWage) || 0), 0);
+    return { trips, count, transitWages };
   };
 
   const dayStats = useMemo(() => {
@@ -228,7 +253,7 @@ export const AttendanceTab = () => {
               const unPay = calcUnnamedPay(staff, log);
               const isDrv = staff.role === 'driver';
               const driverInfo = isDrv
-                ? calcDriverTransit(staff.id, staff.name)
+                ? calcDriverTransit(staff.id, log.date)
                 : { trips: [], count: 0, transitWages: 0 };
               const totalCombined = supPay.total + unPay.total + driverInfo.transitWages;
               const dailyRate =
@@ -359,7 +384,7 @@ export const AttendanceTab = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card p-4 rounded-2xl border border-border/50 shadow-xs">
         <div>
           <h3 className="section-header !mb-0 flex items-center gap-2">
-            <CalendarDays className="w-5 h-5 text-primary" /> Daily Attendance & Overtime
+            <CalendarDays className="w-5 h-5 text-primary" /> {t('attendance.dailyAttendance')}
           </h3>
           <p className="text-xs text-muted-foreground">Track employee presence, daily wages, and overtime hours.</p>
         </div>

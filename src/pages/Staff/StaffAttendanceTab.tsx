@@ -32,6 +32,36 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
     [staffList]
   );
 
+  const isDaySubmitted = useMemo(() => {
+    if (!staff?.id) return false;
+    const myAtt = attendances.find(a => a.staffId === staff.id && a.date === attendanceDate);
+    return !!myAtt?.isSubmitted;
+  }, [attendances, staff?.id, attendanceDate]);
+
+  const handleSubmitDay = () => {
+    const teamIds = [staff].filter(Boolean).map(s => s!.id);
+    teamIds.forEach(id => {
+      const existing = attendances.find(a => a.staffId === id && a.date === attendanceDate);
+      if (existing) {
+        saveAttendance({ ...existing, isSubmitted: true });
+      } else {
+        saveAttendance({ staffId: id, date: attendanceDate, status: 'present', isSubmitted: true } as any);
+      }
+    });
+    toast.success("Attendance submitted successfully!");
+  };
+
+  const handleEditDay = () => {
+    const teamIds = [staff].filter(Boolean).map(s => s!.id);
+    teamIds.forEach(id => {
+      const existing = attendances.find(a => a.staffId === id && a.date === attendanceDate);
+      if (existing) {
+        saveAttendance({ ...existing, isSubmitted: false });
+      }
+    });
+    toast.info("Attendance unlocked for editing.");
+  };
+
   return (
     <div className="animate-slide-up w-full max-w-3xl">
       {isSupervisor ? (
@@ -55,9 +85,8 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
               </div>
 
               <div className="space-y-4">
-                {[staff, ...driversList, ...subStaff]
+                {[staff]
                   .filter(Boolean)
-                  .filter((s, idx, arr) => arr.findIndex(x => x!.id === s!.id) === idx)
                   .map(s => {
                   const historyLogs = attendances
                     .filter(a => a.staffId === s!.id)
@@ -251,16 +280,17 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                 </div>
               </div>
 
-              {/* Attendance Cards for Supervisor and Sub-Staff */}
+              {/* Attendance Cards for Supervisor */}
               <div className="space-y-3.5">
-                {[staff, ...subStaff].filter(Boolean).map(s => {
+                {[staff].filter(Boolean).map(s => {
                   const att = (attendances || []).find(
                     a => a.staffId === s!.id && a.date === attendanceDate
                   );
                   const isSelf = s!.id === staff?.id;
                   const isSup = s!.role === 'supervisor';
                   const otHours = att?.otHours || 0;
-                  const isActive = att?.status === 'present' || att?.status === 'half-day';
+                  const isActive = att?.status === 'present';
+                  const showOt = att?.status === 'present';
 
                   return (
                     <Card
@@ -288,9 +318,16 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                                 </span>
                               )}
                             </p>
-                            <span className="text-[10px] text-muted-foreground uppercase font-extrabold px-2 py-0.5 rounded-full bg-muted">
-                              {s!.role}
-                            </span>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-[10px] text-muted-foreground uppercase font-extrabold px-2 py-0.5 rounded-full bg-muted">
+                                {s!.role}
+                              </span>
+                              {att?.editedByAdmin && (
+                                <span className="text-[10px] text-blue-700 bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 font-bold px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800">
+                                  Modified by Admin: {att.editedByAdminName || 'Admin'}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -306,11 +343,12 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                               <button
                                 key={opt.id}
                                 type="button"
+                                disabled={isDaySubmitted}
                                 onClick={() => {
                                   const current = att || { staffId: s!.id, date: attendanceDate, status: 'present' };
                                   saveAttendance({ ...current, status: opt.id });
                                 }}
-                                className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${isCurrent ? opt.activeColor : 'text-muted-foreground hover:text-foreground'
+                                className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${isDaySubmitted ? 'opacity-50 cursor-not-allowed' : ''} ${isCurrent ? opt.activeColor : 'text-muted-foreground hover:text-foreground'
                                   }`}
                               >
                                 {opt.label}
@@ -321,7 +359,7 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                       </div>
 
                       {/* OT Input */}
-                      {isActive && (
+                      {showOt && (
                         <div className="pt-3 border-t border-border/40 flex flex-wrap items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5">
                             <Label className="text-xs font-semibold text-muted-foreground">
@@ -333,12 +371,13 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                                 min="0"
                                 step="0.5"
                                 placeholder="0"
+                                disabled={isDaySubmitted}
                                 value={att?.otHours?.toString() || ''}
                                 onChange={e => {
                                   const current = att || { staffId: s!.id, date: attendanceDate, status: 'present' };
                                   saveAttendance({ ...current, otHours: Number(e.target.value) || 0 });
                                 }}
-                                className="h-9 rounded-xl text-xs font-semibold w-24"
+                                className="h-9 rounded-xl text-xs font-semibold w-24 disabled:opacity-50"
                               />
                               <span className="text-xs text-muted-foreground">hrs</span>
                             </div>
@@ -732,6 +771,19 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                   })()}
                 </div>
               )}
+
+              {/* Submission Controls */}
+              <div className="mt-4 flex justify-end">
+                {isDaySubmitted ? (
+                  <Button onClick={handleEditDay} variant="outline" className="h-10 rounded-xl font-bold">
+                    Edit Attendance
+                  </Button>
+                ) : (
+                  <Button onClick={handleSubmitDay} className="h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm">
+                    Submit Today's Attendance
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </div>

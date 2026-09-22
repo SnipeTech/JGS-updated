@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
 import {
   LogOut, LayoutDashboard, MapPin, Users, CalendarDays,
   UserCircle, FileText, BarChart3, Wallet, Package, Sofa,
-  ShieldCheck, Sparkles, ChevronRight
+  ChevronRight, ArrowLeftRight, ShieldCheck, Sparkles
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 // Modular Admin Tabs
 import { DashboardOverviewTab } from './Admin/DashboardOverviewTab';
@@ -14,10 +15,10 @@ import { SitesTab } from './Admin/SitesTab';
 import { StaffTab } from './Admin/StaffTab';
 import { AttendanceTab } from './Admin/AttendanceTab';
 import { CustomersTab } from './Admin/CustomersTab';
-import { InvoicesTab } from './Admin/InvoicesTab';
 import { ReportsTab } from './Admin/ReportsTab';
 import { PayrollTab } from './Admin/PayrollTab';
 import { MaterialsSuppliersTab } from './Admin/MaterialsSuppliersTab';
+import { SettingsTab } from './Admin/SettingsTab';
 
 export type TabId =
   | 'dashboard'
@@ -25,26 +26,49 @@ export type TabId =
   | 'staff'
   | 'attendance'
   | 'customers'
-  | 'invoices'
   | 'reports'
   | 'payroll'
+  | 'materials'
   | 'settings';
 
-export const NAV_ITEMS: { id: TabId; label: string; icon: React.ReactNode }[] = [
+export const ALL_NAV_ITEMS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: 'sites', label: 'Sites', icon: <MapPin className="w-4 h-4" /> },
-  { id: 'settings', label: 'Materials & Suppliers', icon: <Package className="w-4 h-4" /> },
+  { id: 'materials', label: 'Materials & Suppliers', icon: <Package className="w-4 h-4" /> },
+  { id: 'settings', label: 'Settings & Master Data', icon: <ShieldCheck className="w-4 h-4" /> },
   { id: 'payroll', label: 'Payroll & Salaries', icon: <Wallet className="w-4 h-4" /> },
   { id: 'staff', label: 'Staff Management', icon: <Users className="w-4 h-4" /> },
   { id: 'attendance', label: 'Attendance', icon: <CalendarDays className="w-4 h-4" /> },
   { id: 'customers', label: 'Clients & Customers', icon: <UserCircle className="w-4 h-4" /> },
-  { id: 'invoices', label: 'Invoicing', icon: <FileText className="w-4 h-4" /> },
   { id: 'reports', label: 'Reports & Ledger', icon: <BarChart3 className="w-4 h-4" /> },
 ];
 
 const AdminDashboard = () => {
-  const { logout } = useApp();
+  const { logout, currentUser } = useApp();
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  const { i18n } = useTranslation();
+
+  useEffect(() => {
+    // Force English language for i18n in Admin Portal
+    if (i18n.language !== 'en') {
+      i18n.changeLanguage('en');
+    }
+
+    // Strictly disable translations on the admin portal
+    const cookieLang = document.cookie.split('; ').find(row => row.startsWith('googtrans='))?.split('=')[1];
+    if (cookieLang && cookieLang !== '/en/en') {
+      document.cookie = 'googtrans=/en/en; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;';
+      window.location.reload();
+    }
+  }, []);
+
+  const NAV_ITEMS = ALL_NAV_ITEMS.filter(item => {
+    if (currentUser?.id === 'admin') return true; // Superadmin
+    if (currentUser?.adminPermissions && currentUser.adminPermissions.length > 0) {
+      return currentUser.adminPermissions.includes(item.id);
+    }
+    return true; // Default all access if no permissions defined
+  });
 
   const renderTab = () => {
     switch (activeTab) {
@@ -58,21 +82,21 @@ const AdminDashboard = () => {
         return <AttendanceTab />;
       case 'customers':
         return <CustomersTab />;
-      case 'invoices':
-        return <InvoicesTab />;
       case 'reports':
         return <ReportsTab />;
       case 'payroll':
         return <PayrollTab />;
-      case 'settings':
+      case 'materials':
         return <MaterialsSuppliersTab />;
+      case 'settings':
+        return <SettingsTab />;
     }
   };
 
   const currentNav = NAV_ITEMS.find(n => n.id === activeTab);
 
   return (
-    <div className="flex min-h-screen bg-background w-full">
+    <div className="notranslate flex min-h-screen bg-background w-full">
       {/* ── Desktop Luxury Sidebar ── */}
       <aside className="hidden md:flex flex-col w-72 bg-[#121110] text-zinc-100 border-r border-amber-950/40 px-4 py-6 fixed h-full z-50 shadow-2xl">
         {/* Brand Header */}
@@ -150,7 +174,7 @@ const AdminDashboard = () => {
       </aside>
 
       {/* ── Main Content Area ── */}
-      <div className="flex-1 md:ml-72 flex flex-col min-w-0">
+      <div className="flex-1 md:ml-72 flex flex-col min-w-0 h-[100dvh] overflow-y-auto pb-20 md:pb-0">
         <div className="page-container flex-1 py-6 px-4 md:px-8">
           {/* Mobile Header (Hidden on Desktop) */}
           <div className="flex md:hidden items-center justify-between mb-5 p-3 rounded-2xl bg-[#121110] text-zinc-100 border border-amber-950/40 shadow-lg animate-slide-up">

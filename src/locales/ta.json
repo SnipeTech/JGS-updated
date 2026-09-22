@@ -1,0 +1,43 @@
+{
+  "sidebar": {
+    "dashboard": "டேஷ்போர்டு",
+    "sites": "தளங்கள் (Sites)",
+    "materials": "பொருட்கள் & விநியோகஸ்தர்கள்",
+    "settings": "அமைப்புகள் (Settings)",
+    "payroll": "சம்பளம் (Payroll)",
+    "staff": "பணியாளர்கள் (Staff)",
+    "attendance": "வருகை (Attendance)",
+    "customers": "வாடிக்கையாளர்கள்",
+    "reports": "அறிக்கைகள் (Reports)",
+    "logout": "வெளியேறு"
+  },
+  "dashboard": {
+    "activeSites": "செயலில் உள்ள தளங்கள்",
+    "totalStaff": "மொத்த பணியாளர்கள்",
+    "clientAccounts": "வாடிக்கையாளர் கணக்குகள்",
+    "pendingInvoices": "நிலுவையில் உள்ள ரசீதுகள்",
+    "actionRequired": "கவனம் தேவை"
+  },
+  "sites": {
+    "siteManagement": "தள நிர்வாகம்",
+    "activeSites": "செயலில் உள்ள தளங்கள்"
+  },
+  "staff": {
+    "staffAndSupervisors": "பணியாளர்கள் & மேற்பார்வையாளர்கள்"
+  },
+  "attendance": {
+    "dailyAttendance": "தினசரி வருகை & கூடுதல் நேரம்"
+  },
+  "staffSidebar": {
+    "workEntry": "வேலை பதிவு",
+    "materialRequest": "பொருள் கோரிக்கை",
+    "workHistory": "வேலை வரலாறு",
+    "thisWeek": "இந்த வாரம்",
+    "teamAttendance": "குழு வருகை",
+    "mySalary": "எனது சம்பளம்"
+  },
+  "common": {
+    "selectLanguage": "மொழி",
+    "welcome": "மீண்டும் வருக"
+  }
+}

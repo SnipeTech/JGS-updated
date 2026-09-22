@@ -272,3 +272,18 @@
   animation: slide-up 0.45s ease-out 0.32s forwards;
   opacity: 0;
 }
+
+/* Hide Google Translate Top Banner and Tooltip */
+.skiptranslate iframe, .goog-te-banner-frame {
+  display: none !important;
+}
+body {
+  top: 0px !important; 
+}
+#goog-gt-tt {
+  display: none !important;
+}
+.goog-text-highlight {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}

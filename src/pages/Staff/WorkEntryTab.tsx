@@ -16,7 +16,7 @@ interface WorkEntryTabProps {
   staff: Staff | undefined;
   mySites: Site[];
   onSubmissionSuccess?: () => void;
-  onNavigateToMaterialRequest?: () => void;
+  onNavigateToMaterialRequest?: (siteId?: string) => void;
   onNavigateToAttendance?: () => void;
 }
 
@@ -38,23 +38,15 @@ export const WorkEntryTab = ({
   const [hoursWorked, setHoursWorked] = useState('8');
   const [workDesc, setWorkDesc] = useState('');
   const [income, setIncome] = useState('');
-  const [selectedWorkers, setSelectedWorkers] = useState<string[]>([]);
+  const [workerCounts, setWorkerCounts] = useState({ painter: 0, plumber: 0, labour: 0 });
 
   // Attendances for today
   const todayAttendances = (attendances || []).filter(a => a.date === todayStr);
 
-  // List of crew / staff members who can be included
-  const candidateStaff = staffList.filter(s => s.role !== 'admin');
-
-  // Staff marked present or half-day today
-  const presentStaffIds = todayAttendances
-    .filter(a => a.status === 'present' || a.status === 'half-day')
-    .map(a => a.staffId);
-
-  // Materials list
-  const [materials, setMaterials] = useState<Material[]>([]);
-  const [matName, setMatName] = useState('');
-  const [matQty, setMatQty] = useState('');
+  // Staff's own attendance for today
+  const myAtt = todayAttendances.find(a => a.staffId === staff?.id);
+  const isSelfPresent = myAtt?.status === 'present' || myAtt?.status === 'half-day';
+  const availableCrew = myAtt?.presentCounts || { painter: 0, plumber: 0, labour: 0 };
 
   // Transport
   const [transportMode, setTransportMode] = useState<TransportMode>('bike');
@@ -65,15 +57,6 @@ export const WorkEntryTab = ({
   const [expenseMode, setExpenseMode] = useState<'bus' | 'auto' | 'bike_petrol' | 'food' | 'other'>('bus');
   const [expenseCustom, setExpenseCustom] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
-
-  const addMaterial = () => {
-    if (!matName.trim()) { toast.error('Enter material name'); return; }
-    if (!matQty || Number(matQty) <= 0) { toast.error('Enter a valid quantity'); return; }
-    setMaterials(prev => [...prev, { name: matName.trim(), quantity: Number(matQty), cost: 0 }]);
-    setMatName(''); setMatQty('');
-  };
-
-  const removeMaterial = (i: number) => setMaterials(prev => prev.filter((_, idx) => idx !== i));
 
   const addExpense = () => {
     const finalName = expenseMode === 'other' ? expenseCustom.trim() : expenseMode;
@@ -113,7 +96,7 @@ export const WorkEntryTab = ({
       siteId: customSiteMode ? `custom_${Date.now()}` : siteId,
       siteName: finalSiteName,
       date: todayStr,
-      materials,
+      materials: [],
       transportMode,
       transportCost,
       expenses,
@@ -122,13 +105,17 @@ export const WorkEntryTab = ({
         customSiteMode ? `[New/Custom Visit: ${visitReason.trim()}]` : '',
         workDesc.trim()
       ].filter(Boolean).join('\n'),
-      workerIds: selectedWorkers,
+      workerCounts: {
+        painter: Math.min(workerCounts.painter, availableCrew.painter),
+        plumber: Math.min(workerCounts.plumber, availableCrew.plumber),
+        labour: Math.min(workerCounts.labour, availableCrew.labour),
+      }
     });
 
     toast.success('Work entry submitted successfully!');
     setSiteId(''); setCustomSiteMode(false); setCustomSiteName(''); setVisitReason('');
-    setWorkDesc(''); setIncome(''); setMaterials([]); setExpenses([]);
-    setSelectedWorkers([]); setTransportCustomCost('');
+    setWorkDesc(''); setIncome(''); setExpenses([]);
+    setWorkerCounts({ painter: 0, plumber: 0, labour: 0 }); setTransportCustomCost('');
     onSubmissionSuccess?.();
   };
 
@@ -188,7 +175,19 @@ export const WorkEntryTab = ({
                         key={s.id}
                         type="button"
                         disabled={!isActive}
-                        onClick={() => { if (isActive) { setSiteId(s.id); setSiteSearch(''); } }}
+                        onClick={() => {
+                          if (isActive) {
+                            setSiteId(s.id);
+                            setSiteSearch('');
+                            // Auto-fill workerCounts from attendance siteAssignments
+                            const assignment = myAtt?.siteAssignments?.find(sa => sa.siteId === s.id);
+                            if (assignment) {
+                              setWorkerCounts(assignment.counts);
+                            } else {
+                              setWorkerCounts({ painter: 0, plumber: 0, labour: 0 });
+                            }
+                          }
+                        }}
                         className={`w-full text-left rounded-xl px-3.5 py-3 border transition-all flex items-center justify-between gap-3
                           ${isSelected
                             ? 'border-[hsl(38_72%_42%)] bg-[hsl(38_72%_42%/0.08)] shadow-sm'
@@ -276,53 +275,25 @@ export const WorkEntryTab = ({
             />
           </div>
 
-          {/* Staff & Crew Included (Based on Attendance) */}
-          <div className="space-y-2 pt-1 border-t border-border/40">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-primary" /> Staff & Crew Included (Based on Attendance)
-                </Label>
-                <p className="text-[11px] text-muted-foreground">
-                  Select staff members who worked on this site today. Present staff are highlighted.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1.5 self-start sm:self-auto">
-                {presentStaffIds.length > 0 && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      // Select all who are present
-                      setSelectedWorkers(Array.from(new Set([...selectedWorkers, ...presentStaffIds])));
-                    }}
-                    className="h-7 text-[11px] px-2.5 rounded-lg font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20"
-                  >
-                    Select All Present ({presentStaffIds.length})
-                  </Button>
-                )}
-                {selectedWorkers.length > 0 && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSelectedWorkers([])}
-                    className="h-7 text-[11px] px-2 rounded-lg text-muted-foreground hover:text-destructive"
-                  >
-                    Clear ({selectedWorkers.length})
-                  </Button>
-                )}
-              </div>
+          {/* Crew Members Included (Based on Attendance) */}
+          <div className="space-y-3 pt-3 border-t border-border/40">
+            <div>
+              <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-primary" /> Crew Members Present at this Site
+              </Label>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Assign your available crew members to this site. <br />
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium">✨ Auto-filled based on your Team Attendance site assignments.</span><br />
+                (Available: {availableCrew.painter} Painters, {availableCrew.plumber} Plumbers, {availableCrew.labour} Labourers)
+              </p>
             </div>
 
             {/* Attendance Status Alert if not marked yet */}
-            {todayAttendances.length === 0 && (
+            {!isSelfPresent && (
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Attendance has not been marked yet for today ({todayStr}).</span>
+                  <span>You have not marked your attendance for today ({todayStr}).</span>
                 </div>
                 {onNavigateToAttendance && (
                   <Button
@@ -338,130 +309,46 @@ export const WorkEntryTab = ({
               </div>
             )}
 
-            {/* Candidate Staff Chips Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-              {candidateStaff.map(s => {
-                const isSelected = selectedWorkers.includes(s.id);
-                const att = todayAttendances.find(a => a.staffId === s.id);
-                const isPresent = att?.status === 'present';
-                const isHalf = att?.status === 'half-day';
-                const isAbsent = att?.status === 'absent';
-
+            {/* Crew Counts Inputs */}
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { id: 'painter' as const, label: 'Painters' },
+                { id: 'plumber' as const, label: 'Plumbers' },
+                { id: 'labour' as const, label: 'Labourers' }
+              ].map(cat => {
+                const maxAvailable = availableCrew[cat.id];
                 return (
-                  <div
-                    key={s.id}
-                    onClick={() => {
-                      setSelectedWorkers(prev =>
-                        prev.includes(s.id)
-                          ? prev.filter(id => id !== s.id)
-                          : [...prev, s.id]
-                      );
-                    }}
-                    className={`flex items-center justify-between p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
-                      isSelected
-                        ? 'bg-primary/10 border-primary shadow-xs font-semibold'
-                        : isPresent || isHalf
-                        ? 'bg-card border-emerald-500/30 hover:border-primary/50'
-                        : isAbsent
-                        ? 'bg-muted/30 border-border/40 opacity-60 hover:opacity-100'
-                        : 'bg-card border-border/50 hover:border-border'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => {}} // handled by parent div onClick
-                        className="rounded accent-primary w-3.5 h-3.5"
-                      />
-                      <div className="min-w-0">
-                        <span className="font-semibold text-foreground truncate block">{s.name}</span>
-                        <span className="text-[10px] text-muted-foreground capitalize">{s.role}</span>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 pl-2 text-right">
-                      {isPresent && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-                          ✅ Present
-                        </span>
-                      )}
-                      {isHalf && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300">
-                          ⚡ Half-Day
-                        </span>
-                      )}
-                      {isAbsent && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-destructive/15 text-destructive">
-                          ❌ Absent
-                        </span>
-                      )}
-                      {!att && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-muted text-muted-foreground">
-                          Not Marked
-                        </span>
-                      )}
-                    </div>
+                  <div key={cat.id} className="space-y-1.5">
+                    <Label className="text-[11px] font-semibold text-muted-foreground">{cat.label}</Label>
+                    <Input
+                      type="number"
+                      readOnly
+                      value={workerCounts[cat.id] || 0}
+                      className="h-9 text-xs rounded-xl bg-muted/50 text-muted-foreground cursor-not-allowed focus-visible:ring-0"
+                    />
+                    <p className="text-[9px] text-muted-foreground text-center">
+                      Auto-synced
+                    </p>
                   </div>
                 );
               })}
             </div>
-            {selectedWorkers.length > 0 && (
+            
+            {Object.values(workerCounts).reduce((a, b) => a + b, 0) > 0 && (
               <p className="text-[11px] text-primary font-medium pt-1">
-                ✓ {selectedWorkers.length} staff member{selectedWorkers.length === 1 ? '' : 's'} attached to this work entry
+                ✓ {Object.values(workerCounts).reduce((a, b) => a + b, 0)} crew members assigned to this site
               </p>
             )}
           </div>
 
           <div>
-            <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1.5">
-              <Package className="w-3.5 h-3.5" /> Materials Used Today
-            </Label>
             <div className="space-y-2">
-              <div className="grid grid-cols-3 gap-2">
-                <Input
-                  placeholder="Material name"
-                  value={matName}
-                  onChange={e => setMatName(e.target.value)}
-                  className="col-span-2 h-10 rounded-xl text-xs"
-                />
-                <Input
-                  type="number"
-                  placeholder="Qty"
-                  value={matQty}
-                  onChange={e => setMatQty(e.target.value)}
-                  className="h-10 rounded-xl text-xs"
-                />
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={addMaterial}
-                className="w-full h-9 rounded-xl text-xs gap-1 font-semibold"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add Material
-              </Button>
-
-              {materials.length > 0 && (
-                <div className="space-y-1.5 pt-1">
-                  {materials.map((m, i) => (
-                    <div key={i} className="flex items-center justify-between px-3 py-2 bg-muted/40 rounded-xl text-xs">
-                      <span className="font-semibold text-foreground">{m.name} × {m.quantity}</span>
-                      <button type="button" onClick={() => removeMaterial(i)} className="text-destructive hover:opacity-70">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
               {onNavigateToMaterialRequest && (
                 <div className="pt-2 border-t border-border/40">
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={onNavigateToMaterialRequest}
+                    onClick={() => onNavigateToMaterialRequest(siteId)}
                     className="w-full h-10 rounded-xl text-xs font-bold gap-2 bg-primary/10 text-primary hover:bg-primary/20 border-primary/30 shadow-xs transition-all"
                   >
                     <Package className="w-4 h-4 text-primary shrink-0" />

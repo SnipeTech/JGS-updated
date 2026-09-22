@@ -73,17 +73,26 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
                 </span>
               </div>
 
-              {log.workerIds && log.workerIds.length > 0 && (
+              {log.workerCounts && (log.workerCounts.painter > 0 || log.workerCounts.plumber > 0 || log.workerCounts.labour > 0) && (
                 <div className="flex flex-wrap gap-1.5 mt-2 mb-1">
-                  {log.workerIds.map(workerId => {
-                    const worker = staffList.find(s => s.id === workerId);
-                    return worker ? (
-                      <div key={workerId} className="flex items-center gap-1 bg-muted/60 rounded-full px-2 py-0.5 border border-border/50">
-                        <Users className="w-3 h-3 text-muted-foreground" />
-                        <span className="text-[10px] font-semibold">{worker.name}</span>
-                      </div>
-                    ) : null;
-                  })}
+                  {log.workerCounts.painter > 0 && (
+                    <div className="flex items-center gap-1 bg-muted/60 rounded-full px-2 py-0.5 border border-border/50">
+                      <Users className="w-3 h-3 text-muted-foreground" />
+                      <span className="text-[10px] font-semibold">{log.workerCounts.painter} Painters</span>
+                    </div>
+                  )}
+                  {log.workerCounts.plumber > 0 && (
+                    <div className="flex items-center gap-1 bg-muted/60 rounded-full px-2 py-0.5 border border-border/50">
+                      <Users className="w-3 h-3 text-muted-foreground" />
+                      <span className="text-[10px] font-semibold">{log.workerCounts.plumber} Plumbers</span>
+                    </div>
+                  )}
+                  {log.workerCounts.labour > 0 && (
+                    <div className="flex items-center gap-1 bg-muted/60 rounded-full px-2 py-0.5 border border-border/50">
+                      <Users className="w-3 h-3 text-muted-foreground" />
+                      <span className="text-[10px] font-semibold">{log.workerCounts.labour} Labourers</span>
+                    </div>
+                  )}
                 </div>
               )}
 

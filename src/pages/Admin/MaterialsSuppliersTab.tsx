@@ -12,15 +12,15 @@ import { format } from 'date-fns';
 import {
   Package, Truck, Building2, Layers, Plus, Trash2, CheckCircle2,
   Clock, IndianRupee, MapPin, ArrowRightLeft, AlertCircle, PenLine, CreditCard,
-  Check, Filter, Calendar, Search, X, Info
+  Check, Filter, Calendar, Search, X, Info, RefreshCw
 } from 'lucide-react';
 import {
-  MaterialRequest, MaterialRequestItem, Supplier, Vehicle, VEHICLE_TYPES, SupplierPaymentRecord
+  MaterialRequest, MaterialRequestItem, Supplier, Vehicle, VEHICLE_TYPES, SupplierPaymentRecord, MaterialRental
 } from '@/types';
 import { calculateDuration, formatTimeString, TIME_SELECT_OPTIONS } from '@/lib/utils';
 import { AssignMaterialModal, CompleteMaterialModal } from './LogisticsModals';
 
-const COMMON_UNITS = ['Bags', 'Tons', 'Kg', 'Liters', 'Nos', 'Sq.Ft', 'Boxes', 'Meters', 'Loads', 'Units'];
+const COMMON_UNITS = ['Bags', 'Tons', 'Kg', 'Liters', 'Nos', 'Sets', 'Sq.Ft', 'Boxes', 'Meters', 'Loads', 'Units'];
 
 export const MaterialsSuppliersTab = () => {
   const {
@@ -28,14 +28,40 @@ export const MaterialsSuppliersTab = () => {
     suppliers, addSupplier, updateSupplier, deleteSupplier,
     vehicles, addVehicle, updateVehicle, deleteVehicle,
     materialRequests, assignMaterialRequest, completeMaterialRequest, deleteMaterialRequest,
-    updateMaterialRequest, staffList
+    updateMaterialRequest, staffList, sites,
+    materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental
   } = useApp();
 
   const driversList = useMemo(() => staffList.filter(s => s.role === 'driver'), [staffList]);
 
-  const [activeSubTab, setActiveSubTab] = useState<'requests' | 'assigned_deliveries' | 'suppliers' | 'vehicles' | 'materials'>('requests');
+  const [activeSubTab, setActiveSubTab] = useState<'requests' | 'assigned_deliveries' | 'rentals' | 'suppliers' | 'vehicles' | 'materials'>('requests');
   const [requestFilter, setRequestFilter] = useState<'all' | 'pending' | 'assigned' | 'completed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Material Rentals Management State
+  const [showDeployRentalModal, setShowDeployRentalModal] = useState(false);
+  const [rentalMatId, setRentalMatId] = useState('');
+  const [rentalMatName, setRentalMatName] = useState('');
+  const [rentalSiteId, setRentalSiteId] = useState('');
+  const [rentalStartDate, setRentalStartDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [rentalQuantity, setRentalQuantity] = useState('1');
+  const [rentalUnit, setRentalUnit] = useState('Sets');
+  const [rentalRequiresDriver, setRentalRequiresDriver] = useState(false);
+  const [rentalDriverId, setRentalDriverId] = useState('');
+  const [rentalVehicleId, setRentalVehicleId] = useState('');
+  const [rentalTransitCost, setRentalTransitCost] = useState('');
+  const [rentalRatePerDay, setRentalRatePerDay] = useState('');
+  const [rentalNotes, setRentalNotes] = useState('');
+  const [rentalStatusFilter, setRentalStatusFilter] = useState<'all' | 'active' | 'returned'>('all');
+
+  // Return / Closing Modal State
+  const [returnModal, setReturnModal] = useState<{ open: boolean; rental: MaterialRental | null }>({
+    open: false,
+    rental: null
+  });
+  const [returnEndDate, setReturnEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [returnRatePerDay, setReturnRatePerDay] = useState('');
+  const [returnNotes, setReturnNotes] = useState('');
 
   // Material Presets Form State
   const [matName, setMatName] = useState('');
@@ -107,14 +133,14 @@ export const MaterialsSuppliersTab = () => {
     const existingPayments: SupplierPaymentRecord[] = currentReq.supplierPayments && currentReq.supplierPayments.length > 0
       ? [...currentReq.supplierPayments]
       : (currentReq.supplierPaidAmount && currentReq.supplierPaidAmount > 0
-          ? [{
-              id: 'init-' + currentReq.id,
-              date: currentReq.supplierPaymentDate || currentReq.date || format(new Date(), 'yyyy-MM-dd'),
-              amount: currentReq.supplierPaidAmount,
-              method: currentReq.supplierPaymentMethod || 'UPI / GPay',
-              notes: currentReq.supplierPaymentNotes || 'Initial payment'
-            }]
-          : []);
+        ? [{
+          id: 'init-' + currentReq.id,
+          date: currentReq.supplierPaymentDate || currentReq.date || format(new Date(), 'yyyy-MM-dd'),
+          amount: currentReq.supplierPaidAmount,
+          method: currentReq.supplierPaymentMethod || 'UPI / GPay',
+          notes: currentReq.supplierPaymentNotes || 'Initial payment'
+        }]
+        : []);
 
     const rateDescriptions = (currentReq.items || [])
       .map(it => `${it.name} (${it.quantity} ${it.unit || 'unit'} @ Supplier Rate: ₹${it.rate || 0}/${it.unit || 'unit'})`)
@@ -315,6 +341,103 @@ export const MaterialsSuppliersTab = () => {
     );
   }, [materialSettings, searchQuery]);
 
+  const filteredRentals = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    return (materialRentals || [])
+      .filter(r => rentalStatusFilter === 'all' ? true : r.status === rentalStatusFilter)
+      .filter(r => {
+        if (!q) return true;
+        return (
+          r.materialName.toLowerCase().includes(q) ||
+          r.siteName.toLowerCase().includes(q) ||
+          (r.driverName && r.driverName.toLowerCase().includes(q)) ||
+          (r.notes && r.notes.toLowerCase().includes(q))
+        );
+      })
+      .sort((a, b) => new Date(b.startDate + 'T00:00:00').getTime() - new Date(a.startDate + 'T00:00:00').getTime());
+  }, [materialRentals, rentalStatusFilter, searchQuery]);
+
+  const handleSelectRentalMaterial = (id: string) => {
+    setRentalMatId(id);
+    const setting = materialSettings.find(m => m.id === id);
+    if (setting) {
+      setRentalMatName(setting.name);
+      setRentalUnit(setting.unit || 'Sets');
+      setRentalRatePerDay((setting.rentalRatePerDay || setting.defaultRate || '').toString());
+    }
+  };
+
+  const handleDeployRental = (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalMatName = rentalMatName.trim();
+    if (!finalMatName) { toast.error('Please enter or select rental material'); return; }
+    if (!rentalSiteId) { toast.error('Please select destination site'); return; }
+    const siteObj = sites.find(s => s.id === rentalSiteId);
+    if (!siteObj) { toast.error('Site not found'); return; }
+    const qty = Number(rentalQuantity) || 1;
+    const rate = Number(rentalRatePerDay) || 0;
+
+    const driverObj = rentalRequiresDriver ? driversList.find(d => d.id === rentalDriverId) : undefined;
+    const vehObj = rentalRequiresDriver ? vehicles.find(v => v.id === rentalVehicleId) : undefined;
+
+    addMaterialRental({
+      materialId: rentalMatId || `m_${Date.now()}`,
+      materialName: finalMatName,
+      siteId: siteObj.id,
+      siteName: siteObj.name,
+      startDate: rentalStartDate || format(new Date(), 'yyyy-MM-dd'),
+      quantity: qty,
+      unit: rentalUnit || 'Sets',
+      requiresDriver: rentalRequiresDriver,
+      driverId: driverObj?.id,
+      driverName: driverObj?.name,
+      vehicleId: vehObj?.id,
+      vehicleNumber: vehObj?.number,
+      transitCost: rentalRequiresDriver ? (Number(rentalTransitCost) || 0) : 0,
+      rentalRatePerDay: rate,
+      status: 'active',
+      notes: rentalNotes.trim() || undefined
+    });
+
+    toast.success(`Rental deployment of ${qty} ${rentalUnit} ${finalMatName} to ${siteObj.name} initiated!`);
+    setShowDeployRentalModal(false);
+    setRentalMatId(''); setRentalMatName(''); setRentalSiteId('');
+    setRentalQuantity('1'); setRentalRequiresDriver(false);
+    setRentalDriverId(''); setRentalVehicleId(''); setRentalTransitCost('');
+    setRentalRatePerDay(''); setRentalNotes('');
+  };
+
+  const openReturnModal = (rental: MaterialRental) => {
+    setReturnModal({ open: true, rental });
+    setReturnEndDate(format(new Date(), 'yyyy-MM-dd'));
+    setReturnRatePerDay((rental.rentalRatePerDay || 0).toString());
+    setReturnNotes(rental.notes || '');
+  };
+
+  const handleConfirmReturn = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!returnModal.rental) return;
+    const r = returnModal.rental;
+    const startMs = new Date(r.startDate + 'T00:00:00').getTime();
+    const endMs = new Date(returnEndDate + 'T00:00:00').getTime();
+    const totalDays = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+    const rate = Number(returnRatePerDay) || 0;
+    const materialCost = totalDays * r.quantity * rate;
+    const totalCost = materialCost + (r.transitCost || 0);
+
+    updateMaterialRental(r.id, {
+      endDate: returnEndDate,
+      rentalRatePerDay: rate,
+      totalDays,
+      totalRentalCost: totalCost,
+      status: 'returned',
+      notes: returnNotes.trim() || r.notes
+    });
+
+    toast.success(`Rental closed for ${r.materialName}! Total calculated: ₹${totalCost.toLocaleString()}`);
+    setReturnModal({ open: false, rental: null });
+  };
+
   // Handlers for Material Presets
   const handleMaterialSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -452,6 +575,16 @@ export const MaterialsSuppliersTab = () => {
             {vehicles.length}
           </div>
         </div>
+
+        <div className="p-3.5 rounded-2xl bg-card border border-border/70 shadow-2xs space-y-1 hover:border-amber-500/40 transition-all">
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Site Rentals</span>
+            <span className="p-1.5 rounded-xl bg-amber-500/10 text-amber-600"><RefreshCw className="w-3.5 h-3.5" /></span>
+          </div>
+          <div className="text-2xl font-heading font-black text-amber-600 dark:text-amber-400">
+            {(materialRentals || []).filter(r => r.status === 'active').length}
+          </div>
+        </div>
       </div>
 
       {/* Sub-Tabs Selector */}
@@ -459,6 +592,7 @@ export const MaterialsSuppliersTab = () => {
         {[
           { id: 'requests' as const, label: `Requisitions (${materialRequests.filter(r => r.status === 'pending').length} Pending)`, icon: <Package className="w-4 h-4" /> },
           { id: 'assigned_deliveries' as const, label: `Active Driver Deliveries (${assignedDeliveries.length})`, icon: <Truck className="w-4 h-4 text-blue-500" /> },
+          { id: 'rentals' as const, label: `Rental Materials (${(materialRentals || []).filter(r => r.status === 'active').length} Active)`, icon: <RefreshCw className="w-4 h-4 text-amber-500" /> },
           { id: 'suppliers' as const, label: `Suppliers & Ledger (${suppliers.length})`, icon: <Building2 className="w-4 h-4" /> },
           { id: 'vehicles' as const, label: `Fleet Vehicles (${vehicles.length})`, icon: <Truck className="w-4 h-4" /> },
           { id: 'materials' as const, label: 'Materials Catalog', icon: <Layers className="w-4 h-4" /> },
@@ -466,11 +600,10 @@ export const MaterialsSuppliersTab = () => {
           <button
             key={tab.id}
             onClick={() => setActiveSubTab(tab.id)}
-            className={`flex items-center gap-2 py-2 px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
-              activeSubTab === tab.id
+            className={`flex items-center gap-2 py-2 px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${activeSubTab === tab.id
                 ? 'bg-card text-foreground font-bold shadow-xs border border-border/50'
                 : 'text-muted-foreground hover:text-foreground'
-            }`}
+              }`}
           >
             {tab.icon} {tab.label}
           </button>
@@ -487,12 +620,14 @@ export const MaterialsSuppliersTab = () => {
             activeSubTab === 'requests'
               ? 'Search requisitions by site name, staff, material name, or notes...'
               : activeSubTab === 'assigned_deliveries'
-              ? 'Search active deliveries by driver, site, supplier, vehicle, or product...'
-              : activeSubTab === 'suppliers'
-              ? 'Search suppliers by name, phone, materials supplied, or address...'
-              : activeSubTab === 'vehicles'
-              ? 'Search fleet vehicles by plate number, name, or vehicle type...'
-              : 'Search catalog materials by name or unit...'
+                ? 'Search active deliveries by driver, site, supplier, vehicle, or product...'
+                : activeSubTab === 'rentals'
+                  ? 'Search rental materials by item name, site, or driver...'
+                  : activeSubTab === 'suppliers'
+                    ? 'Search suppliers by name, phone, materials supplied, or address...'
+                    : activeSubTab === 'vehicles'
+                      ? 'Search fleet vehicles by plate number, name, or vehicle type...'
+                      : 'Search catalog materials by name or unit...'
           }
           className="pl-10 pr-10 h-10 rounded-xl text-xs bg-card border-border/60 shadow-2xs"
         />
@@ -619,7 +754,7 @@ export const MaterialsSuppliersTab = () => {
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between text-[11px] font-bold uppercase text-muted-foreground tracking-wider">
                         <span>Materials in Vehicle</span>
-                        <span>Rates (Supplier · Client)</span>
+                        <span>Item Cost</span>
                       </div>
                       <div className="space-y-1.5">
                         {req.items.map((it, idx) => {
@@ -630,28 +765,18 @@ export const MaterialsSuppliersTab = () => {
                           return (
                             <div
                               key={idx}
-                              className="p-2.5 rounded-xl bg-muted/40 border border-border/40 text-xs space-y-1.5"
+                              className="p-2.5 rounded-xl bg-muted/40 border border-border/40 text-xs flex items-center justify-between"
                             >
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <Package className="w-3.5 h-3.5 text-primary" />
-                                  <span className="font-bold text-foreground">{it.name}</span>
-                                  <span className="bg-primary/10 text-primary px-2 py-0.5 rounded text-[11px] font-bold">
-                                    {it.quantity} {it.unit}
-                                  </span>
-                                </div>
-                                <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-500/20">
-                                  🏢 Supplier: ₹{sRate}/{it.unit || 'unit'} = ₹{sTotal.toLocaleString()}
+                              <div className="flex items-center gap-2">
+                                <Package className="w-3.5 h-3.5 text-primary" />
+                                <span className="font-bold text-foreground">{it.name}</span>
+                                <span className="bg-primary/10 text-primary px-2 py-0.5 rounded text-[11px] font-bold">
+                                  {it.quantity} {it.unit}
                                 </span>
                               </div>
-                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono pt-1.5 border-t border-border/20">
-                                <span className="text-[10px] text-muted-foreground">
-                                  (Supplier = Raw materials only · Driver & Petrol not added)
-                                </span>
-                                <span className="text-primary font-semibold">
-                                  👤 Client: ₹{cRate}/{it.unit || 'unit'} (<strong className="font-bold">₹{cTotal.toLocaleString()}</strong>)
-                                </span>
-                              </div>
+                              <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-500/20">
+                                ₹{sRate}/{it.unit || 'unit'} = ₹{sTotal.toLocaleString()}
+                              </span>
                             </div>
                           );
                         })}
@@ -659,10 +784,7 @@ export const MaterialsSuppliersTab = () => {
                       {((req.clientMaterialCost || 0) > 0 || (req.customerMaterialCost || 0) > 0) && (
                         <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
                           <span className="px-2.5 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold text-[11px] border border-emerald-500/20">
-                            🏢 Supplier Total: ₹{supplierPrice.toLocaleString()} (Materials only)
-                          </span>
-                          <span className="px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary font-bold text-[11px] border border-primary/20">
-                            👤 Client Materials: ₹{(req.clientMaterialCost || req.customerMaterialCost || 0).toLocaleString()}
+                            Total: ₹{supplierPrice.toLocaleString()} (Materials only)
                           </span>
                         </div>
                       )}
@@ -672,8 +794,7 @@ export const MaterialsSuppliersTab = () => {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-border/40 text-xs">
                       <div className="flex items-center gap-3 flex-wrap">
                         <span className="flex items-center gap-1">
-                          🏢 Supplier Bill: <strong className="text-foreground">₹{supplierPrice.toLocaleString()}</strong>
-                          <span className="text-[10px] text-muted-foreground">(Materials only)</span>
+                          Material Bill: <strong className="text-foreground">₹{supplierPrice.toLocaleString()}</strong>
                         </span>
                         <span>
                           Amount Given: <strong className="text-emerald-600">₹{paid.toLocaleString()}</strong>
@@ -724,9 +845,8 @@ export const MaterialsSuppliersTab = () => {
                 <button
                   key={f}
                   onClick={() => setRequestFilter(f)}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold capitalize transition-all ${
-                    requestFilter === f ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
-                  }`}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold capitalize transition-all ${requestFilter === f ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                    }`}
                 >
                   {f}
                 </button>
@@ -774,9 +894,8 @@ export const MaterialsSuppliersTab = () => {
 
                     <div className="flex items-center gap-2 flex-wrap">
                       <span
-                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
-                          isCompleted ? 'bg-emerald-500/15 text-emerald-600' : isAssigned ? 'bg-blue-500/15 text-blue-600' : 'bg-amber-500/15 text-amber-600'
-                        }`}
+                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${isCompleted ? 'bg-emerald-500/15 text-emerald-600' : isAssigned ? 'bg-blue-500/15 text-blue-600' : 'bg-amber-500/15 text-amber-600'
+                          }`}
                       >
                         {req.status}
                       </span>
@@ -851,9 +970,39 @@ export const MaterialsSuppliersTab = () => {
 
                       {req.supplierPrice !== undefined && (
                         <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-muted/40 border border-border/40">
-                          <div className="flex items-center gap-3 text-muted-foreground">
-                            <span>Supplier Bill: <strong className="text-foreground">₹{supplierPrice.toLocaleString()}</strong></span>
-                            <span>Paid: <strong className="text-emerald-600 font-bold">₹{paid.toLocaleString()}</strong></span>
+                          <div className="flex items-center gap-3 text-muted-foreground w-full sm:w-auto flex-1">
+                            <div className="flex flex-col gap-1.5 w-full">
+                              <span className="flex items-center gap-1.5 font-bold">
+                                Total Bill: <strong className="text-foreground text-sm font-mono">₹{supplierPrice.toLocaleString()}</strong>
+                              </span>
+                              <div className="p-2.5 mt-1 bg-muted/50 rounded-lg border border-border/60 text-[10px] space-y-1 w-full max-w-xs">
+                                <div className="flex justify-between items-center text-muted-foreground">
+                                  <span>Material Subtotal:</span>
+                                  <span className="font-mono font-semibold text-foreground">₹{((supplierPrice || 0) - (req.gstAmount || 0)).toLocaleString()}</span>
+                                </div>
+                                {(req.gstAmount || 0) > 0 && (
+                                  req.gstType === 'inter-state' ? (
+                                    <div className="flex justify-between items-center text-muted-foreground">
+                                      <span>IGST ({req.igstRate || 0}%):</span>
+                                      <span className="font-mono font-semibold text-foreground">₹{req.gstAmount?.toLocaleString()}</span>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <div className="flex justify-between items-center text-muted-foreground">
+                                        <span>CGST ({req.cgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                        <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                      </div>
+                                      <div className="flex justify-between items-center text-muted-foreground">
+                                        <span>SGST ({req.sgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                        <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                      </div>
+                                    </>
+                                  )
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3 ml-2 flex-wrap">
+                              <span>Paid: <strong className="text-emerald-600 font-bold">₹{paid.toLocaleString()}</strong></span>
                             <span>
                               Balance:{' '}
                               <strong className={balance > 0 ? 'text-destructive font-bold' : 'text-emerald-600 font-bold'}>
@@ -863,6 +1012,7 @@ export const MaterialsSuppliersTab = () => {
                             {req.supplierPaymentDate && (
                               <span className="text-[10px] text-muted-foreground font-mono">({req.supplierPaymentDate})</span>
                             )}
+                            </div>
                           </div>
 
                           {balance > 0 ? (
@@ -886,6 +1036,206 @@ export const MaterialsSuppliersTab = () => {
                 </Card>
               );
             })
+          )}
+        </div>
+      )}
+
+      {/* ── RENTAL MATERIALS TAB ── */}
+      {activeSubTab === 'rentals' && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="section-header !mb-0.5 flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-amber-600" />
+                Site Material Rentals & Scaffolding Tracker
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Deploy rental materials to sites, assign transit drivers, track daily duration, and calculate closing rental costs based on days and product quantities.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => setShowDeployRentalModal(true)}
+                className="h-8 rounded-xl gap-1.5 text-xs font-semibold text-white shadow-sm bg-amber-600 hover:bg-amber-700"
+              >
+                <Plus className="w-3.5 h-3.5" /> Deploy Material to Site
+              </Button>
+            </div>
+          </div>
+
+          {/* Quick Filter Status Pills */}
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-card rounded-xl border border-border/50 text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground font-semibold flex items-center gap-1">
+                <Filter className="w-3.5 h-3.5 text-primary" /> Status:
+              </span>
+              {(['all', 'active', 'returned'] as const).map(st => (
+                <button
+                  key={st}
+                  onClick={() => setRentalStatusFilter(st)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold capitalize transition-colors ${
+                    rentalStatusFilter === st
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted/50 text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  {st === 'all' ? `All (${materialRentals.length})` : st === 'active' ? `Active On Site (${materialRentals.filter(r => r.status === 'active').length})` : `Returned / Settled (${materialRentals.filter(r => r.status === 'returned').length})`}
+                </button>
+              ))}
+            </div>
+
+            <div className="text-[11px] text-muted-foreground font-medium">
+              Formula: (Days on site) × (Qty) × (Rate/day per product) + Transit Cost
+            </div>
+          </div>
+
+          {/* Rental Cards List */}
+          {filteredRentals.length === 0 ? (
+            <div className="text-center py-12 bg-card rounded-2xl border border-border/50">
+              <RefreshCw className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-sm font-semibold text-foreground">
+                {searchQuery ? `No rental records matching "${searchQuery}"` : 'No rental material deployments found'}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {searchQuery ? 'Try another search term' : 'Click "Deploy Material to Site" to dispatch scaffolding, generators, or machines.'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3.5">
+              {filteredRentals.map(rental => {
+                const todayStr = format(new Date(), 'yyyy-MM-dd');
+                const startMs = new Date(rental.startDate + 'T00:00:00').getTime();
+                const currentEnd = rental.endDate || todayStr;
+                const currentEndMs = new Date(currentEnd + 'T00:00:00').getTime();
+                const daysActive = Math.max(1, Math.floor((currentEndMs - startMs) / 86400000) + 1);
+                const isActive = rental.status === 'active';
+                const calculatedRent = (rental.totalRentalCost !== undefined && !isActive)
+                  ? rental.totalRentalCost
+                  : (daysActive * rental.quantity * (rental.rentalRatePerDay || 0)) + (rental.transitCost || 0);
+
+                return (
+                  <Card key={rental.id} className={`p-4 rounded-2xl bg-card border shadow-xs space-y-3 transition-all ${
+                    isActive ? 'border-amber-500/30 hover:border-amber-500/50' : 'border-border/60 opacity-90'
+                  }`}>
+                    {/* Card Header */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-border/40">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-heading font-bold text-base text-foreground">
+                            {rental.materialName}
+                          </h4>
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                            {rental.quantity} {rental.unit}
+                          </span>
+                          {isActive ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/15 text-emerald-600 border border-emerald-500/25 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              Active On Site ({daysActive} Days)
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-muted text-muted-foreground border border-border/50 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              Returned ({rental.totalDays || daysActive} Days Total)
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                          <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
+                          <span className="font-semibold text-foreground">{rental.siteName}</span>
+                          <span>•</span>
+                          <span>Start Date: <strong>{format(new Date(rental.startDate + 'T00:00:00'), 'dd MMM yyyy')}</strong></span>
+                          {rental.endDate && (
+                            <>
+                              <span>•</span>
+                              <span>End Date: <strong>{format(new Date(rental.endDate + 'T00:00:00'), 'dd MMM yyyy')}</strong></span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right Amount Badge & Action */}
+                      <div className="flex items-center gap-2 sm:self-center">
+                        <div className="text-right">
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground block">
+                            {isActive ? 'Accrued Rent to Date' : 'Final Total Rental Cost'}
+                          </span>
+                          <span className={`font-heading font-black text-lg ${isActive ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
+                            ₹{calculatedRent.toLocaleString()}
+                          </span>
+                        </div>
+
+                        {isActive ? (
+                          <Button
+                            size="sm"
+                            onClick={() => openReturnModal(rental)}
+                            className="h-9 px-3 rounded-xl text-xs font-bold gap-1 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Return & Calculate
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openReturnModal(rental)}
+                            className="h-9 px-3 rounded-xl text-xs font-semibold gap-1"
+                          >
+                            <PenLine className="w-3.5 h-3.5" /> Adjust Calculation
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            if (confirm('Delete this rental record?')) deleteMaterialRental(rental.id);
+                          }}
+                          className="h-8 w-8 text-destructive hover:bg-destructive/10 rounded-lg"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Calculation Details Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-2.5 rounded-xl bg-muted/20 text-xs">
+                      <div>
+                        <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Rate per Unit/Day:</span>
+                        <span className="font-bold text-foreground">₹{rental.rentalRatePerDay} / day</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Duration on Site:</span>
+                        <span className="font-bold text-foreground">
+                          {isActive ? `${daysActive} Days (Running)` : `${rental.totalDays || daysActive} Days Total`}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Driver & Transit:</span>
+                        {rental.requiresDriver ? (
+                          <span className="font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                            <Truck className="w-3 h-3" />
+                            {rental.driverName || 'Driver'} {rental.transitCost ? `(₹${rental.transitCost})` : ''}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">Not Required</span>
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Material Rent Subtotal:</span>
+                        <span className="font-semibold text-foreground">
+                          {daysActive}d × {rental.quantity} × ₹{rental.rentalRatePerDay} = ₹{(daysActive * rental.quantity * rental.rentalRatePerDay).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    {rental.notes && (
+                      <p className="text-xs text-muted-foreground italic bg-muted/30 px-3 py-1.5 rounded-lg border border-border/30">
+                        "{rental.notes}"
+                      </p>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
           )}
         </div>
       )}
@@ -923,11 +1273,10 @@ export const MaterialsSuppliersTab = () => {
             <div className="flex flex-wrap gap-1 items-center">
               <button
                 onClick={() => setSupplierMaterialFilter('all')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
-                  supplierMaterialFilter === 'all'
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${supplierMaterialFilter === 'all'
                     ? 'bg-primary text-primary-foreground'
                     : 'bg-muted/50 text-muted-foreground hover:bg-muted'
-                }`}
+                  }`}
               >
                 All ({suppliers.length})
               </button>
@@ -945,11 +1294,10 @@ export const MaterialsSuppliersTab = () => {
                   <button
                     key={m.id}
                     onClick={() => setSupplierMaterialFilter(m.name.toLowerCase())}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 ${
-                      supplierMaterialFilter === m.name.toLowerCase()
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 ${supplierMaterialFilter === m.name.toLowerCase()
                         ? 'bg-primary text-primary-foreground font-bold'
                         : 'bg-muted/50 text-muted-foreground hover:bg-muted'
-                    }`}
+                      }`}
                   >
                     <span>{m.name}</span>
                     <span className="text-[10px] opacity-75">({count})</span>
@@ -1027,11 +1375,10 @@ export const MaterialsSuppliersTab = () => {
                               key={mat.id}
                               type="button"
                               onClick={() => toggleCatalogMaterial(mat.name)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border shadow-2xs ${
-                                isSelected
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border shadow-2xs ${isSelected
                                   ? 'bg-primary text-primary-foreground border-primary'
                                   : 'bg-background hover:bg-muted text-foreground border-border/70'
-                              }`}
+                                }`}
                             >
                               {isSelected ? <Check className="w-3.5 h-3.5 text-primary-foreground" /> : <Plus className="w-3.5 h-3.5 opacity-60" />}
                               <span>{mat.name}</span>
@@ -1106,8 +1453,8 @@ export const MaterialsSuppliersTab = () => {
                   const displayedMaterials = sup.suppliedMaterials && sup.suppliedMaterials.length > 0
                     ? sup.suppliedMaterials
                     : (typeof sup.materialsSupplied === 'string'
-                        ? sup.materialsSupplied.split(',').map(s => s.trim()).filter(Boolean)
-                        : (Array.isArray(sup.materialsSupplied) ? (sup.materialsSupplied as string[]) : []));
+                      ? sup.materialsSupplied.split(',').map(s => s.trim()).filter(Boolean)
+                      : (Array.isArray(sup.materialsSupplied) ? (sup.materialsSupplied as string[]) : []));
 
                   // Calculate all payments made to this supplier to show When & How Much Paid
                   const allSupplierPayments = supOrders.flatMap(r => {
@@ -1162,8 +1509,8 @@ export const MaterialsSuppliersTab = () => {
                               const mats = sup.suppliedMaterials && sup.suppliedMaterials.length > 0
                                 ? sup.suppliedMaterials
                                 : (typeof sup.materialsSupplied === 'string'
-                                    ? sup.materialsSupplied.split(',').map(s => s.trim()).filter(Boolean)
-                                    : (Array.isArray(sup.materialsSupplied) ? (sup.materialsSupplied as string[]) : []));
+                                  ? sup.materialsSupplied.split(',').map(s => s.trim()).filter(Boolean)
+                                  : (Array.isArray(sup.materialsSupplied) ? (sup.materialsSupplied as string[]) : []));
                               const catalogNames = materialSettings.map(m => m.name.toLowerCase());
                               const fromCatalog = mats.filter(m => catalogNames.includes(m.toLowerCase()));
                               const extra = mats.filter(m => !catalogNames.includes(m.toLowerCase()));
@@ -1491,8 +1838,8 @@ export const MaterialsSuppliersTab = () => {
                         const mats = sup.suppliedMaterials && sup.suppliedMaterials.length > 0
                           ? sup.suppliedMaterials
                           : (typeof sup.materialsSupplied === 'string'
-                              ? sup.materialsSupplied.split(',').map(x => x.trim()).filter(Boolean)
-                              : (Array.isArray(sup.materialsSupplied) ? (sup.materialsSupplied as string[]) : []));
+                            ? sup.materialsSupplied.split(',').map(x => x.trim()).filter(Boolean)
+                            : (Array.isArray(sup.materialsSupplied) ? (sup.materialsSupplied as string[]) : []));
                         if (mats.length === 0) return null;
                         return (
                           <div className="flex flex-wrap items-center gap-1 mt-1.5">
@@ -1549,14 +1896,14 @@ export const MaterialsSuppliersTab = () => {
                       const orderPayments: SupplierPaymentRecord[] = req.supplierPayments && req.supplierPayments.length > 0
                         ? req.supplierPayments
                         : (req.supplierPaidAmount && req.supplierPaidAmount > 0
-                            ? [{
-                                id: 'init-' + req.id,
-                                date: req.supplierPaymentDate || req.date || 'Recorded',
-                                amount: req.supplierPaidAmount,
-                                method: req.supplierPaymentMethod || 'Paid',
-                                notes: req.supplierPaymentNotes
-                              }]
-                            : []);
+                          ? [{
+                            id: 'init-' + req.id,
+                            date: req.supplierPaymentDate || req.date || 'Recorded',
+                            amount: req.supplierPaidAmount,
+                            method: req.supplierPaymentMethod || 'Paid',
+                            notes: req.supplierPaymentNotes
+                          }]
+                          : []);
 
                       return (
                         <Card key={req.id} className="p-3.5 rounded-xl bg-card border border-border/50 text-xs space-y-2.5">
@@ -1567,9 +1914,8 @@ export const MaterialsSuppliersTab = () => {
                               <span className="text-[10px] text-muted-foreground font-mono">({req.date || 'Today'})</span>
                             </div>
                             <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
-                                orderBal <= 0 ? 'bg-emerald-500/15 text-emerald-600' : 'bg-amber-500/15 text-amber-600'
-                              }`}
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${orderBal <= 0 ? 'bg-emerald-500/15 text-emerald-600' : 'bg-amber-500/15 text-amber-600'
+                                }`}
                             >
                               {orderBal <= 0 ? 'Fully Paid' : `Balance: ₹${orderBal.toLocaleString()}`}
                             </span>
@@ -1594,9 +1940,34 @@ export const MaterialsSuppliersTab = () => {
                                 </span>
                               </div>
                             ))}
+                            {(req.gstAmount || 0) > 0 && (
+                              <div className="pt-1.5 mt-1.5 border-t border-border/30 space-y-1">
+                                <div className="flex justify-between items-center text-[11px] text-muted-foreground px-2">
+                                  <span>Material Subtotal:</span>
+                                  <span className="font-mono font-semibold text-foreground">
+                                    ₹{((req.supplierPrice || req.materialCost || 0) - req.gstAmount!).toLocaleString()}
+                                  </span>
+                                </div>
+                                {req.gstType === 'inter-state' ? (
+                                  <div className="flex justify-between items-center text-[11px] text-muted-foreground px-2">
+                                    <span>IGST ({req.igstRate || 0}%):</span>
+                                    <span className="font-mono font-semibold text-foreground">₹{req.gstAmount?.toLocaleString()}</span>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="flex justify-between items-center text-[11px] text-muted-foreground px-2">
+                                      <span>CGST ({req.cgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                      <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-[11px] text-muted-foreground px-2">
+                                      <span>SGST ({req.sgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                      <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            )}
                           </div>
-
-                          {/* Payment Records: When We Paid & How Much Paid */}
                           <div className="space-y-1.5 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                             <div className="flex items-center justify-between">
                               <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wide flex items-center gap-1.5">
@@ -1716,14 +2087,14 @@ export const MaterialsSuppliersTab = () => {
             const existingPayments: SupplierPaymentRecord[] = req.supplierPayments && req.supplierPayments.length > 0
               ? req.supplierPayments
               : (req.supplierPaidAmount && req.supplierPaidAmount > 0
-                  ? [{
-                      id: 'init-' + req.id,
-                      date: req.supplierPaymentDate || req.date || 'Recorded',
-                      amount: req.supplierPaidAmount,
-                      method: req.supplierPaymentMethod || 'Paid',
-                      notes: req.supplierPaymentNotes
-                    }]
-                  : []);
+                ? [{
+                  id: 'init-' + req.id,
+                  date: req.supplierPaymentDate || req.date || 'Recorded',
+                  amount: req.supplierPaidAmount,
+                  method: req.supplierPaymentMethod || 'Paid',
+                  notes: req.supplierPaymentNotes
+                }]
+                : []);
             const totalAlreadyPaid = existingPayments.reduce((s, p) => s + p.amount, 0);
             const remainingBal = Math.max(0, price - totalAlreadyPaid);
             const paidNowNum = Number(payAmount) || 0;
@@ -2171,6 +2542,381 @@ export const MaterialsSuppliersTab = () => {
               Update Rates (Supplier & Client)
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── DEPLOY RENTAL MATERIAL MODAL ── */}
+      <Dialog open={showDeployRentalModal} onOpenChange={setShowDeployRentalModal}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-amber-600" />
+              Deploy Rental Material to Site
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleDeployRental} className="space-y-4 pt-1 text-xs">
+            {/* Quick Material Selection or Entry */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Rental Material / Equipment *</Label>
+              {materialSettings.filter(m => m.isRental).length > 0 ? (
+                <div className="space-y-2">
+                  <Select
+                    value={rentalMatId}
+                    onValueChange={val => {
+                      if (val === 'custom') {
+                        setRentalMatId('');
+                        setRentalMatName('');
+                      } else {
+                        handleSelectRentalMaterial(val);
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue placeholder="Select from Rental Material Catalog" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {materialSettings.map(m => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.name} {m.isRental ? '★ Rental' : ''} {m.rentalRatePerDay ? `(₹${m.rentalRatePerDay}/day)` : ''}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value="custom">+ Custom / Enter Name Manually</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <Input
+                    placeholder="Material Name (e.g., Scaffolding Pipes, Concrete Mixer, Shuttering Plates)"
+                    value={rentalMatName}
+                    onChange={e => setRentalMatName(e.target.value)}
+                    className="h-9 text-xs"
+                    required
+                  />
+                </div>
+              ) : (
+                <Input
+                  placeholder="Material Name (e.g., Scaffolding, Concrete Mixer Machine)"
+                  value={rentalMatName}
+                  onChange={e => setRentalMatName(e.target.value)}
+                  className="h-9 text-xs"
+                  required
+                />
+              )}
+            </div>
+
+            {/* Destination Site & Start Date */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Destination Site *</Label>
+                <Select value={rentalSiteId} onValueChange={setRentalSiteId}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue placeholder="Select Site" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sites.map(s => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Start Date on Site *</Label>
+                <Input
+                  type="date"
+                  value={rentalStartDate}
+                  onChange={e => setRentalStartDate(e.target.value)}
+                  className="h-9 text-xs"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Quantity & Unit */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Quantity Deployed *</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={rentalQuantity}
+                  onChange={e => setRentalQuantity(e.target.value)}
+                  placeholder="e.g. 50"
+                  className="h-9 text-xs font-mono"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Unit</Label>
+                <Select value={rentalUnit} onValueChange={setRentalUnit}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue placeholder="Select Unit" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COMMON_UNITS.map(u => (
+                      <SelectItem key={u} value={u}>{u}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Daily Rental Rate per Unit */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">Rental Rate Per Day (Per Unit / Product)</Label>
+                <span className="text-[10px] text-muted-foreground">Can also be adjusted at return time</span>
+              </div>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-mono text-xs">₹</span>
+                <Input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={rentalRatePerDay}
+                  onChange={e => setRentalRatePerDay(e.target.value)}
+                  placeholder="e.g. 15 per day per set"
+                  className="pl-7 h-9 text-xs font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Driver Assignment Section */}
+            <div className="p-3 rounded-xl bg-muted/40 border border-border/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rentalRequiresDriver}
+                    onChange={e => setRentalRequiresDriver(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500"
+                  />
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-amber-600" />
+                    Driver & Vehicle Required for Transit
+                  </span>
+                </label>
+                <span className="text-[10px] text-muted-foreground">
+                  {rentalRequiresDriver ? 'Driver will be assigned' : 'Not required (Direct on-site)'}
+                </span>
+              </div>
+
+              {rentalRequiresDriver && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-border/40">
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Assign Driver</Label>
+                    <Select value={rentalDriverId} onValueChange={setRentalDriverId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select Driver" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {driversList.map(d => (
+                          <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Assign Vehicle</Label>
+                    <Select value={rentalVehicleId} onValueChange={setRentalVehicleId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select Vehicle" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {vehicles.map(v => (
+                          <SelectItem key={v.id} value={v.id}>{v.name} ({v.number})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Transit Cost (₹)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={rentalTransitCost}
+                      onChange={e => setRentalTransitCost(e.target.value)}
+                      placeholder="e.g. 500"
+                      className="h-8 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Notes */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Notes / Identification / Serial No.</Label>
+              <Textarea
+                value={rentalNotes}
+                onChange={e => setRentalNotes(e.target.value)}
+                placeholder="e.g. 50 sets scaffolding pipes, delivered in good condition"
+                className="text-xs min-h-[60px]"
+              />
+            </div>
+
+            {/* Estimated Daily Preview */}
+            {(Number(rentalQuantity) > 0 && Number(rentalRatePerDay) > 0) && (
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between text-xs">
+                <span className="text-amber-800 dark:text-amber-300 font-semibold">Estimated Daily Cost:</span>
+                <span className="font-mono font-bold text-amber-700 dark:text-amber-400">
+                  ₹{(Number(rentalQuantity) * Number(rentalRatePerDay)).toLocaleString()} / day
+                </span>
+              </div>
+            )}
+
+            <Button
+              type="submit"
+              className="w-full h-10 rounded-xl text-white font-bold text-xs bg-amber-600 hover:bg-amber-700 shadow-sm"
+            >
+              Deploy Rental Material
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── RETURN & CLOSE RENTAL CALCULATION MODAL ── */}
+      <Dialog
+        open={returnModal.open}
+        onOpenChange={open => !open && setReturnModal({ open: false, rental: null })}
+      >
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              Close Rental & Settle Calculations
+            </DialogTitle>
+          </DialogHeader>
+
+          {returnModal.rental && (() => {
+            const r = returnModal.rental;
+            const startMs = new Date(r.startDate + 'T00:00:00').getTime();
+            const endMs = new Date(returnEndDate + 'T00:00:00').getTime();
+            const totalDays = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+            const rateNum = Number(returnRatePerDay) || 0;
+            const matRent = totalDays * r.quantity * rateNum;
+            const transitCost = r.transitCost || 0;
+            const totalCost = matRent + transitCost;
+
+            return (
+              <form onSubmit={handleConfirmReturn} className="space-y-4 pt-1 text-xs">
+                {/* Deployment Overview Card */}
+                <div className="p-3 rounded-xl bg-card border border-border/70 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-foreground">{r.materialName}</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary font-bold">
+                      {r.quantity} {r.unit}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground flex items-center gap-2">
+                    <MapPin className="w-3 h-3 text-primary" /> Site: <span className="font-semibold text-foreground">{r.siteName}</span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground flex items-center gap-2">
+                    <Calendar className="w-3 h-3" /> Deployed on: <span className="font-mono font-semibold text-foreground">{r.startDate}</span>
+                  </div>
+                  {r.requiresDriver && (
+                    <div className="text-[11px] text-muted-foreground flex items-center gap-2">
+                      <Truck className="w-3 h-3 text-blue-500" /> Driver: <span className="font-semibold text-foreground">{r.driverName || 'Assigned'}</span>
+                      {r.vehicleNumber && ` (${r.vehicleNumber})`}
+                      {r.transitCost ? ` • Transit: ₹${r.transitCost.toLocaleString()}` : ''}
+                    </div>
+                  )}
+                </div>
+
+                {/* Return Date & Rental Rate Input */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">End / Return Date *</Label>
+                    <Input
+                      type="date"
+                      value={returnEndDate}
+                      onChange={e => setReturnEndDate(e.target.value)}
+                      className="h-9 text-xs"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Rate / Day per {r.unit || 'Product'} (₹)</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-mono text-xs">₹</span>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={returnRatePerDay}
+                        onChange={e => setReturnRatePerDay(e.target.value)}
+                        placeholder="Rate per day"
+                        className="pl-7 h-9 text-xs font-mono"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Return Notes */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Closing Notes / Condition on Return</Label>
+                  <Textarea
+                    value={returnNotes}
+                    onChange={e => setReturnNotes(e.target.value)}
+                    placeholder="e.g. All sets returned in good condition, no damage"
+                    className="text-xs min-h-[50px]"
+                  />
+                </div>
+
+                {/* Realtime Calculation Breakdown */}
+                <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60 space-y-2">
+                  <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                    Final Cost Calculation Breakdown
+                  </div>
+
+                  <div className="space-y-1 pt-1 text-xs">
+                    <div className="flex justify-between items-center text-muted-foreground">
+                      <span>Deployment Duration:</span>
+                      <span className="font-mono font-semibold text-foreground">
+                        {totalDays} {totalDays === 1 ? 'day' : 'days'} ({r.startDate} to {returnEndDate})
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-muted-foreground">
+                      <span>Material Rental Calculation:</span>
+                      <span className="font-mono font-semibold text-foreground">
+                        {totalDays} days × {r.quantity} {r.unit} × ₹{rateNum} = ₹{matRent.toLocaleString()}
+                      </span>
+                    </div>
+                    {transitCost > 0 && (
+                      <div className="flex justify-between items-center text-muted-foreground">
+                        <span>Transit / Driver Delivery Cost:</span>
+                        <span className="font-mono font-semibold text-foreground">
+                          + ₹{transitCost.toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                    <div className="pt-2 border-t border-border/50 flex justify-between items-center font-bold text-sm">
+                      <span className="text-foreground">Total Rental Cost:</span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-400 text-base">
+                        ₹{totalCost.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <Button
+                  type="submit"
+                  className="w-full h-10 rounded-xl text-white font-bold text-xs bg-emerald-600 hover:bg-emerald-700 shadow-sm"
+                >
+                  Confirm Return & Settle Rental
+                </Button>
+              </form>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

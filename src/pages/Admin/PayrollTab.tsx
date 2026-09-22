@@ -45,7 +45,7 @@ export interface SalaryPaymentRecord {
 }
 
 export const PayrollTab = () => {
-  const { staffList, attendances, dailyLogs, materialRequests } = useApp();
+  const { staffList, attendances, dailyLogs, materialRequests, labourTypes } = useApp();
 
   // Top level views: 'current' (Active Statements) vs 'history' (History of Paid Salaries)
   const [mainTab, setMainTab] = useState<'current' | 'history'>('current');
@@ -347,9 +347,27 @@ export const PayrollTab = () => {
           tripCount: number;
           dayTotal: number;
           siteName?: string;
+          workDescription?: string;
+          notes?: string;
+          inTime?: string;
+          outTime?: string;
+          duration?: string;
+          painters?: number;
+          plumbers?: number;
+          labour?: number;
+          editedByAdmin?: boolean;
+          editedByAdminName?: string;
         }[] = [];
 
+        let hasAdminEdits = false;
+        let adminEditName = '';
+
         staffAtts.forEach(att => {
+          if (att.editedByAdmin) {
+            hasAdminEdits = true;
+            if (att.editedByAdminName && !adminEditName) adminEditName = att.editedByAdminName;
+          }
+
           if (att.status === 'present' || att.status === 'half-day') {
             const isHalf = att.status === 'half-day';
             if (isHalf) halfDays++;
@@ -424,7 +442,9 @@ export const PayrollTab = () => {
               duration: dur,
               painters: att.presentCounts?.painter || 0,
               plumbers: att.presentCounts?.plumber || 0,
-              labour: att.presentCounts?.labour || 0
+              labour: att.presentCounts?.labour || 0,
+              editedByAdmin: att.editedByAdmin,
+              editedByAdminName: att.editedByAdminName
             });
           } else if (att.status === 'absent') {
             absentDays++;
@@ -442,7 +462,9 @@ export const PayrollTab = () => {
               notes: att.notes || 'Marked Absent',
               inTime: '-',
               outTime: '-',
-              duration: '-'
+              duration: '-',
+              editedByAdmin: att.editedByAdmin,
+              editedByAdminName: att.editedByAdminName
             });
           }
         });
@@ -521,6 +543,8 @@ export const PayrollTab = () => {
           crewPay: supervisorCrewPay,
           totalDriverTrips,
           totalEarned,
+          hasAdminEdits,
+          adminEditName,
           breakdown
         };
       })
@@ -563,9 +587,18 @@ export const PayrollTab = () => {
         crewOt: number;
         dayTotal: number;
         siteName?: string;
+        editedByAdmin?: boolean;
+        editedByAdminName?: string;
       }[] = [];
 
+      let hasAdminEdits = false;
+      let adminEditName = '';
+
       supAtts.forEach(att => {
+        if (att.editedByAdmin) {
+          hasAdminEdits = true;
+          if (att.editedByAdminName && !adminEditName) adminEditName = att.editedByAdminName;
+        }
         if (!att.presentCounts) return;
         const p = att.presentCounts.painter || 0;
         const pl = att.presentCounts.plumber || 0;
@@ -610,7 +643,9 @@ export const PayrollTab = () => {
           otPay: dayCrewOt,
           crewOt: dayCrewOt,
           dayTotal: dayCrewBase + dayCrewOt,
-          siteName: matchingLog?.siteName || 'Multiple Sites'
+          siteName: matchingLog?.siteName || 'Site Operation',
+          editedByAdmin: att.editedByAdmin,
+          editedByAdminName: att.editedByAdminName
         });
       });
 
@@ -638,7 +673,9 @@ export const PayrollTab = () => {
           otPay: totalCrewOtPay,
           transitPay: 0,
           crewPay: 0,
-          totalEarned: totalCrewPay,
+          totalEarned: totalCrewBasePay + totalCrewOtPay,
+          hasAdminEdits,
+          adminEditName,
           breakdown: crewBreakdown
         });
       }
@@ -670,44 +707,88 @@ export const PayrollTab = () => {
   const totalPaid = allCards.filter(p => isStaffPaid(p.id)).reduce((s, p) => s + p.totalEarned, 0);
   const totalPending = totalPayroll - totalPaid;
 
-  // Weekly Crew Summary Metrics
+  // Weekly Crew Summary Metrics & Trade Breakdown
+  const tradeBreakdown = useMemo(() => {
+    const breakdown: Record<string, { days: number, basePay: number, otPay: number, totalCost: number }> = {};
+    
+    // Initialize with all available labour types
+    labourTypes.forEach(lt => {
+      breakdown[lt] = { days: 0, basePay: 0, otPay: 0, totalCost: 0 };
+    });
+
+    // Hardcoded supervisor unnamed crews (they are paid as a blended 'crewBasePay')
+    let supervisorPainterDays = 0;
+    let supervisorPlumberDays = 0;
+    let supervisorLabourDays = 0;
+    let totalSupervisorCrewCost = 0; // We can't perfectly split supervisor cost by trade, so we track it separately or blend it.
+
+    supervisorCrewTeams.forEach(t => {
+      supervisorPainterDays += t.painterDays;
+      supervisorPlumberDays += t.plumberDays;
+      supervisorLabourDays += t.labourDays;
+      totalSupervisorCrewCost += t.totalEarned;
+    });
+
+    if (supervisorPainterDays > 0) {
+      if (!breakdown['painter']) breakdown['painter'] = { days: 0, basePay: 0, otPay: 0, totalCost: 0 };
+      breakdown['painter'].days += supervisorPainterDays;
+    }
+    if (supervisorPlumberDays > 0) {
+      if (!breakdown['plumber']) breakdown['plumber'] = { days: 0, basePay: 0, otPay: 0, totalCost: 0 };
+      breakdown['plumber'].days += supervisorPlumberDays;
+    }
+    if (supervisorLabourDays > 0) {
+      if (!breakdown['labour']) breakdown['labour'] = { days: 0, basePay: 0, otPay: 0, totalCost: 0 };
+      breakdown['labour'].days += supervisorLabourDays;
+    }
+    
+    // Add supervisor total cost as a separate line item since it's blended
+    if (totalSupervisorCrewCost > 0) {
+      breakdown['unnamed_crew_blended'] = {
+        days: supervisorPainterDays + supervisorPlumberDays + supervisorLabourDays,
+        basePay: 0, otPay: 0, totalCost: totalSupervisorCrewCost
+      };
+    }
+
+    // Individual named crew members
+    const individualCrew = staffPayrollData.filter(s => s.role !== 'supervisor' && s.role !== 'driver');
+    individualCrew.forEach(c => {
+      const role = c.role;
+      if (!breakdown[role]) breakdown[role] = { days: 0, basePay: 0, otPay: 0, totalCost: 0 };
+      breakdown[role].days += c.presentDays + (c.halfDays * 0.5);
+      breakdown[role].basePay += c.basePay;
+      breakdown[role].otPay += c.otPay;
+      breakdown[role].totalCost += c.totalEarned;
+    });
+
+    return breakdown;
+  }, [supervisorCrewTeams, staffPayrollData, labourTypes]);
+
+  const totalCrewCostFromTrades = Object.values(tradeBreakdown).reduce((sum, t) => sum + t.totalCost, 0);
+
   const crewSummary = useMemo(() => {
     let painterDays = 0;
     let plumberDays = 0;
     let labourDays = 0;
     let crewOtPay = 0;
-    let crewBasePay = 0;
     let totalCrewCost = 0;
 
-    supervisorCrewTeams.forEach(t => {
-      painterDays += t.painterDays;
-      plumberDays += t.plumberDays;
-      labourDays += t.labourDays;
-      crewOtPay += t.otPay;
-      crewBasePay += t.basePay;
-      totalCrewCost += t.totalEarned;
-    });
-
-    const individualCrew = staffPayrollData.filter(s => s.role !== 'supervisor' && s.role !== 'driver');
-    individualCrew.forEach(c => {
-      if (c.role === 'painter') painterDays += c.presentDays + (c.halfDays * 0.5);
-      else if (c.role === 'plumber') plumberDays += c.presentDays + (c.halfDays * 0.5);
-      else labourDays += c.presentDays + (c.halfDays * 0.5);
-      crewOtPay += c.otPay;
-      crewBasePay += c.basePay;
-      totalCrewCost += c.totalEarned;
+    Object.entries(tradeBreakdown).forEach(([trade, data]) => {
+      if (trade === 'painter') painterDays += data.days;
+      else if (trade === 'plumber') plumberDays += data.days;
+      else if (trade === 'labour') labourDays += data.days;
+      crewOtPay += data.otPay;
+      totalCrewCost += data.totalCost;
     });
 
     return {
       painterDays,
       plumberDays,
       labourDays,
-      totalHeadcountDays: painterDays + plumberDays + labourDays,
       crewOtPay,
-      crewBasePay,
       totalCrewCost
     };
-  }, [supervisorCrewTeams, staffPayrollData]);
+  }, [tradeBreakdown]);
 
   // Export Current Statement PDF
   const exportPayrollPDF = () => {
@@ -1350,39 +1431,25 @@ export const PayrollTab = () => {
                     Total Crew Weekly Payout
                   </span>
                   <p className="text-xl font-heading font-extrabold text-amber-700 dark:text-amber-300">
-                    ₹{crewSummary.totalCrewCost.toLocaleString()}
+                    ₹{totalCrewCostFromTrades.toLocaleString()}
                   </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                <div className="bg-card p-2.5 rounded-xl border border-border/50 text-center">
-                  <span className="text-[10px] text-muted-foreground uppercase font-bold">🎨 Painters</span>
-                  <p className="font-heading font-extrabold text-base text-foreground mt-0.5">
-                    {crewSummary.painterDays} Man-Days
-                  </p>
-                </div>
-
-                <div className="bg-card p-2.5 rounded-xl border border-border/50 text-center">
-                  <span className="text-[10px] text-muted-foreground uppercase font-bold">🔧 Plumbers</span>
-                  <p className="font-heading font-extrabold text-base text-foreground mt-0.5">
-                    {crewSummary.plumberDays} Man-Days
-                  </p>
-                </div>
-
-                <div className="bg-card p-2.5 rounded-xl border border-border/50 text-center">
-                  <span className="text-[10px] text-muted-foreground uppercase font-bold">🧱 Helpers & Labours</span>
-                  <p className="font-heading font-extrabold text-base text-foreground mt-0.5">
-                    {crewSummary.labourDays} Man-Days
-                  </p>
-                </div>
-
-                <div className="bg-card p-2.5 rounded-xl border border-border/50 text-center">
-                  <span className="text-[10px] text-muted-foreground uppercase font-bold">⏰ Crew Overtime</span>
-                  <p className="font-heading font-extrabold text-base text-amber-600 dark:text-amber-400 mt-0.5">
-                    +₹{crewSummary.crewOtPay.toLocaleString()}
-                  </p>
-                </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-2 pt-1">
+                {Object.entries(tradeBreakdown).filter(([k, v]) => v.days > 0 || v.totalCost > 0).map(([trade, data]) => (
+                  <div key={trade} className="bg-card p-2.5 rounded-xl border border-border/50 text-center flex flex-col justify-between">
+                    <span className="text-[10px] text-muted-foreground uppercase font-bold break-words">
+                      {trade === 'unnamed_crew_blended' ? 'Unnamed Blended' : trade}
+                    </span>
+                    <p className="font-heading font-extrabold text-sm text-foreground mt-0.5">
+                      {data.days} Days
+                    </p>
+                    <span className="text-[10px] font-semibold text-primary mt-1 border-t border-border/40 pt-1">
+                      ₹{data.totalCost.toLocaleString()}
+                    </span>
+                  </div>
+                ))}
               </div>
             </Card>
           )}
@@ -1548,6 +1615,11 @@ export const PayrollTab = () => {
                                     {p.labourDays} Labour Days
                                   </span>
                                 )}
+                                {p.hasAdminEdits && (
+                                  <span className="text-[10px] font-semibold bg-blue-500/10 text-blue-600 border border-blue-500/30 px-2 py-0.5 rounded-full">
+                                    Modified by {p.adminEditName || 'Admin'}
+                                  </span>
+                                )}
                               </>
                             ) : (
                               <>
@@ -1567,6 +1639,11 @@ export const PayrollTab = () => {
                                 {isDrv && p.totalDriverTrips > 0 && (
                                   <span className="text-[10px] font-semibold bg-blue-500/10 text-blue-600 px-2 py-0.5 rounded-full">
                                     {p.totalDriverTrips} Runs
+                                  </span>
+                                )}
+                                {p.hasAdminEdits && (
+                                  <span className="text-[10px] font-semibold bg-blue-500/10 text-blue-600 border border-blue-500/30 px-2 py-0.5 rounded-full">
+                                    Modified by {p.adminEditName || 'Admin'}
                                   </span>
                                 )}
                               </>
@@ -2293,6 +2370,12 @@ export const PayrollTab = () => {
                                   <Clock className="w-3 h-3 text-primary" />
                                   {log.inTime} – {log.outTime}
                                   {log.duration ? ` (${log.duration})` : ''}
+                                </span>
+                              )}
+                              
+                              {log.editedByAdmin && (
+                                <span className="text-[10px] text-blue-700 bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 font-bold px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800">
+                                  Modified by Admin: {log.editedByAdminName || 'Admin'}
                                 </span>
                               )}
                             </div>

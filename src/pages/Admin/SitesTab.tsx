@@ -12,13 +12,16 @@ import { format } from 'date-fns';
 import {
   Plus, MapPin, Users, TrendingUp, TrendingDown, IndianRupee,
   Building2, CheckCircle2, Clock, Send, Truck, Package,
-  CalendarDays, Banknote, ArrowRightLeft, AlertCircle, Layers, UserCircle, Trash2, FileDown
+  CalendarDays, Banknote, ArrowRightLeft, AlertCircle, Layers, UserCircle, Trash2, FileDown,
+  Receipt, FileText, ChevronDown, ChevronUp, RefreshCw
 } from 'lucide-react';
-import { Material, MaterialRequest } from '@/types';
+import { useTranslation } from 'react-i18next';
+import { Material, MaterialRequest, MaterialRental } from '@/types';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getSiteAvailableStock } from '@/lib/utils';
 import { AssignMaterialModal, CompleteMaterialModal } from './LogisticsModals';
+import { SitePaymentMilestones } from './SitePaymentMilestones';
 
 const statusBadge = (status: string) => {
   const map: Record<string, string> = {
@@ -36,10 +39,127 @@ const statusBadge = (status: string) => {
 export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () => void }) => {
   const {
     sites, dailyLogs, updateSite, deleteSite, addDailyLog, currentUser, staffList, attendances,
-    materialRequests, materialSettings, suppliers, vehicles, assignMaterialRequest, completeMaterialRequest, addMaterialRequest
+    materialRequests, materialSettings, suppliers, vehicles, assignMaterialRequest, completeMaterialRequest, addMaterialRequest, paymentStageMaster,
+    materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental
   } = useApp();
   const site = sites.find(s => s.id === siteId);
   const today = format(new Date(), 'yyyy-MM-dd');
+
+  // Rentals for this site
+  const siteRentals = useMemo(() => {
+    return (materialRentals || [])
+      .filter(r => r.siteId === siteId)
+      .sort((a, b) => new Date(b.startDate + 'T00:00:00').getTime() - new Date(a.startDate + 'T00:00:00').getTime());
+  }, [materialRentals, siteId]);
+
+  const activeSiteRentals = useMemo(() => {
+    return siteRentals.filter(r => r.status === 'active');
+  }, [siteRentals]);
+
+  const returnedSiteRentals = useMemo(() => {
+    return siteRentals.filter(r => r.status === 'returned');
+  }, [siteRentals]);
+
+  // Site Rental Deploy Modal State
+  const [showDeployRental, setShowDeployRental] = useState(false);
+  const [rentalMatId, setRentalMatId] = useState('');
+  const [rentalMatName, setRentalMatName] = useState('');
+  const [rentalStartDate, setRentalStartDate] = useState(today);
+  const [rentalQuantity, setRentalQuantity] = useState('1');
+  const [rentalUnit, setRentalUnit] = useState('Sets');
+  const [rentalRatePerDay, setRentalRatePerDay] = useState('');
+  const [rentalRequiresDriver, setRentalRequiresDriver] = useState(false);
+  const [rentalDriverId, setRentalDriverId] = useState('');
+  const [rentalVehicleId, setRentalVehicleId] = useState('');
+  const [rentalTransitCost, setRentalTransitCost] = useState('');
+  const [rentalNotes, setRentalNotes] = useState('');
+
+  // Return Rental Modal State
+  const [returnRentalModal, setReturnRentalModal] = useState<{ open: boolean; rental: MaterialRental | null }>({
+    open: false,
+    rental: null
+  });
+  const [returnEndDate, setReturnEndDate] = useState(today);
+  const [returnRatePerDay, setReturnRatePerDay] = useState('');
+  const [returnNotes, setReturnNotes] = useState('');
+
+  const handleSelectRentalPreset = (id: string) => {
+    setRentalMatId(id);
+    const setting = (materialSettings || []).find(m => m.id === id);
+    if (setting) {
+      setRentalMatName(setting.name);
+      setRentalUnit(setting.unit || 'Sets');
+      setRentalRatePerDay((setting.rentalRatePerDay || setting.defaultRate || '').toString());
+    }
+  };
+
+  const handleDeployRentalToSite = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!site) return;
+    const finalName = rentalMatName.trim();
+    if (!finalName) { toast.error('Enter rental material name'); return; }
+    const qty = Number(rentalQuantity) || 1;
+    const rate = Number(rentalRatePerDay) || 0;
+    const driverObj = rentalRequiresDriver ? staffList.find(s => s.id === rentalDriverId) : undefined;
+    const vehObj = rentalRequiresDriver ? vehicles.find(v => v.id === rentalVehicleId) : undefined;
+
+    addMaterialRental({
+      materialId: rentalMatId || `m_${Date.now()}`,
+      materialName: finalName,
+      siteId: site.id,
+      siteName: site.name,
+      startDate: rentalStartDate || today,
+      quantity: qty,
+      unit: rentalUnit || 'Sets',
+      requiresDriver: rentalRequiresDriver,
+      driverId: driverObj?.id,
+      driverName: driverObj?.name,
+      vehicleId: vehObj?.id,
+      vehicleNumber: vehObj?.number,
+      transitCost: rentalRequiresDriver ? (Number(rentalTransitCost) || 0) : 0,
+      rentalRatePerDay: rate,
+      status: 'active',
+      notes: rentalNotes.trim() || undefined
+    });
+
+    toast.success(`Deployed ${qty} ${rentalUnit} ${finalName} to ${site.name}!`);
+    setShowDeployRental(false);
+    setRentalMatId(''); setRentalMatName(''); setRentalQuantity('1');
+    setRentalRatePerDay(''); setRentalRequiresDriver(false);
+    setRentalDriverId(''); setRentalVehicleId(''); setRentalTransitCost('');
+    setRentalNotes('');
+  };
+
+  const openReturnRentalModal = (rental: MaterialRental) => {
+    setReturnRentalModal({ open: true, rental });
+    setReturnEndDate(today);
+    setReturnRatePerDay((rental.rentalRatePerDay || 0).toString());
+    setReturnNotes(rental.notes || '');
+  };
+
+  const handleConfirmReturnRental = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!returnRentalModal.rental) return;
+    const r = returnRentalModal.rental;
+    const startMs = new Date(r.startDate + 'T00:00:00').getTime();
+    const endMs = new Date(returnEndDate + 'T00:00:00').getTime();
+    const totalDays = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+    const rate = Number(returnRatePerDay) || 0;
+    const materialCost = totalDays * r.quantity * rate;
+    const totalCost = materialCost + (r.transitCost || 0);
+
+    updateMaterialRental(r.id, {
+      endDate: returnEndDate,
+      rentalRatePerDay: rate,
+      totalDays,
+      totalRentalCost: totalCost,
+      status: 'returned',
+      notes: returnNotes.trim() || r.notes
+    });
+
+    toast.success(`Rental settled for ${r.materialName}! Total calculated: ₹${totalCost.toLocaleString()}`);
+    setReturnRentalModal({ open: false, rental: null });
+  };
 
   const siteLogsAll = useMemo(() => {
     return dailyLogs.filter(l => l.siteId === siteId);
@@ -292,6 +412,234 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     return map;
   }, [siteLogs]);
 
+  // Detailed History Ledger Data for the selected Date Range
+  const rangeHistoryData = useMemo(() => {
+    // 1. Identify all active dates in range for this site
+    const dateSet = new Set<string>();
+
+    dailyLogs.forEach(l => {
+      if (l.siteId === siteId && l.date >= fromDate && l.date <= toDate) {
+        dateSet.add(l.date);
+      }
+    });
+
+    (attendances || []).forEach(a => {
+      if (a.date >= fromDate && a.date <= toDate && (a.siteId === siteId || a.siteAssignments?.some(sa => sa.siteId === siteId)) && a.status !== 'absent') {
+        dateSet.add(a.date);
+      }
+    });
+
+    (materialRequests || []).forEach(r => {
+      const d = r.date || r.createdAt?.slice(0, 10);
+      if (r.siteId === siteId && d && d >= fromDate && d <= toDate && (r.status === 'completed' || r.status === 'assigned')) {
+        dateSet.add(d);
+      }
+    });
+
+    (site?.paymentStages || []).forEach(st => {
+      (st.payments || []).forEach(p => {
+        if (p.date >= fromDate && p.date <= toDate) {
+          dateSet.add(p.date);
+        }
+      });
+    });
+
+    const sortedDates = Array.from(dateSet).sort((a, b) => b.localeCompare(a));
+
+    let rangeTotalStaffDays = 0;
+    let rangeTotalCrewDays = 0;
+    let rangeTotalExpenses = 0;
+    let rangeTotalMaterialsCost = 0;
+    let rangeTotalTransportCost = 0;
+    let rangeTotalMiscCost = 0;
+    let rangeTotalIncome = 0;
+
+    const days = sortedDates.map(date => {
+      const logs = dailyLogs.filter(l => l.siteId === siteId && l.date === date);
+      const dayAttendances = (attendances || []).filter(a =>
+        a.date === date && (a.siteId === siteId || a.siteAssignments?.some(sa => sa.siteId === siteId)) && a.status !== 'absent'
+      );
+      const dayRequests = (materialRequests || []).filter(r => {
+        const d = r.date || r.createdAt?.slice(0, 10);
+        return r.siteId === siteId && d === date && (r.status === 'completed' || r.status === 'assigned');
+      });
+      const dayMilestonePayments = (site?.paymentStages || []).flatMap(st =>
+        (st.payments || []).filter(p => p.date === date).map(p => ({ ...p, stageName: st.stageName }))
+      );
+
+      // 1. Employees / Workforce calculation
+      const namedStaffMap = new Map<string, { id: string; name: string; role: string; source: string }>();
+
+      // From logs: submitter + workerIds
+      logs.forEach(l => {
+        if (l.staffId) {
+          const s = staffList.find(st => st.id === l.staffId);
+          namedStaffMap.set(l.staffId, {
+            id: l.staffId,
+            name: s ? s.name : l.staffName || 'Staff',
+            role: s ? s.role : 'Staff',
+            source: 'Log Submitter'
+          });
+        }
+        (l.workerIds || []).forEach(wId => {
+          const s = staffList.find(st => st.id === wId);
+          if (s) {
+            namedStaffMap.set(wId, {
+              id: wId,
+              name: s.name,
+              role: s.role,
+              source: 'Assigned on Site'
+            });
+          }
+        });
+      });
+
+      // From attendances
+      dayAttendances.forEach(a => {
+        const s = staffList.find(st => st.id === a.staffId);
+        if (s && !namedStaffMap.has(a.staffId)) {
+          namedStaffMap.set(a.staffId, {
+            id: a.staffId,
+            name: s.name,
+            role: s.role,
+            source: 'Attendance'
+          });
+        }
+      });
+
+      const namedStaff = Array.from(namedStaffMap.values());
+
+      // Crew counts (painters, plumbers, labourers)
+      let painterCount = 0;
+      let plumberCount = 0;
+      let labourCount = 0;
+
+      logs.forEach(l => {
+        if (l.workerCounts) {
+          painterCount += l.workerCounts.painter || 0;
+          plumberCount += l.workerCounts.plumber || 0;
+          labourCount += l.workerCounts.labour || 0;
+        }
+      });
+
+      // Check attendance siteAssignments if logs didn't specify crew counts
+      dayAttendances.forEach(a => {
+        const assignment = a.siteAssignments?.find(sa => sa.siteId === siteId);
+        if (assignment && assignment.counts) {
+          if (logs.every(l => !l.workerCounts || (l.workerCounts.painter === 0 && l.workerCounts.plumber === 0 && l.workerCounts.labour === 0))) {
+            painterCount += assignment.counts.painter || 0;
+            plumberCount += assignment.counts.plumber || 0;
+            labourCount += assignment.counts.labour || 0;
+          }
+        }
+      });
+
+      const totalCrew = painterCount + plumberCount + labourCount;
+      const totalWorkers = namedStaff.length + totalCrew;
+
+      // 2. Costs & Expenses calculation
+      // A. Materials
+      let dayMaterialsCost = 0;
+      const materialsList: { name: string; quantity: number; cost: number; total: number }[] = [];
+      logs.forEach(l => {
+        (l.materials || []).forEach(m => {
+          const defRate = materialSettings.find(s => s.name.toLowerCase() === m.name.toLowerCase())?.defaultRate || 0;
+          const unitRate = m.cost && m.cost > 0 ? m.cost : defRate;
+          const itemTotal = unitRate * (m.quantity || 1);
+          dayMaterialsCost += itemTotal;
+          materialsList.push({
+            name: m.name,
+            quantity: m.quantity || 1,
+            cost: unitRate,
+            total: itemTotal
+          });
+        });
+      });
+
+      // Material requests completed / delivered to site
+      dayRequests.forEach(r => {
+        const reqMatCost = r.materialCost || r.supplierPrice || 0;
+        dayMaterialsCost += reqMatCost;
+      });
+
+      // B. Transport
+      const logTransportCost = logs.reduce((sum, l) => sum + (l.transportCost || 0), 0);
+      const reqTransportCost = dayRequests.reduce((sum, r) => sum + (r.driverCost || 0) + (r.petrolCharge || 0), 0);
+      const dayTransportCost = logTransportCost + reqTransportCost;
+
+      // C. Misc Expenses
+      const miscExpensesList: { itemName: string; amount: number; staffName?: string }[] = [];
+      logs.forEach(l => {
+        (l.expenses || []).forEach(e => {
+          miscExpensesList.push({
+            itemName: e.itemName,
+            amount: e.amount || 0,
+            staffName: l.staffName
+          });
+        });
+      });
+      const dayMiscCost = miscExpensesList.reduce((sum, e) => sum + e.amount, 0);
+
+      const dayTotalExpense = dayMaterialsCost + dayTransportCost + dayMiscCost;
+
+      // 3. Income
+      const logIncome = logs.reduce((sum, l) => sum + (l.incomeFromClient || 0), 0);
+      const milestoneIncome = dayMilestonePayments.reduce((sum, p) => sum + p.amount, 0);
+      const dayTotalIncome = logIncome + milestoneIncome;
+
+      const dayNetBalance = dayTotalIncome - dayTotalExpense;
+
+      // Add to range totals
+      rangeTotalStaffDays += namedStaff.length;
+      rangeTotalCrewDays += totalCrew;
+      rangeTotalExpenses += dayTotalExpense;
+      rangeTotalMaterialsCost += dayMaterialsCost;
+      rangeTotalTransportCost += dayTransportCost;
+      rangeTotalMiscCost += dayMiscCost;
+      rangeTotalIncome += dayTotalIncome;
+
+      return {
+        date,
+        logs,
+        dayAttendances,
+        dayRequests,
+        dayMilestonePayments,
+        namedStaff,
+        painterCount,
+        plumberCount,
+        labourCount,
+        totalCrew,
+        totalWorkers,
+        dayMaterialsCost,
+        materialsList,
+        dayTransportCost,
+        logTransportCost,
+        reqTransportCost,
+        dayMiscCost,
+        miscExpensesList,
+        dayTotalExpense,
+        dayTotalIncome,
+        logIncome,
+        milestoneIncome,
+        dayNetBalance
+      };
+    });
+
+    return {
+      days,
+      totalActiveDays: days.length,
+      totalStaffDays: rangeTotalStaffDays,
+      totalCrewDays: rangeTotalCrewDays,
+      totalManDays: rangeTotalStaffDays + rangeTotalCrewDays,
+      totalExpenses: rangeTotalExpenses,
+      totalMaterialsCost: rangeTotalMaterialsCost,
+      totalTransportCost: rangeTotalTransportCost,
+      totalMiscCost: rangeTotalMiscCost,
+      totalIncome: rangeTotalIncome,
+      rangeNetBalance: rangeTotalIncome - rangeTotalExpenses
+    };
+  }, [dailyLogs, attendances, materialRequests, site?.paymentStages, siteId, fromDate, toDate, staffList, materialSettings]);
+
   // Material requests for this site
   const siteRequests = useMemo(() => {
     return (materialRequests || [])
@@ -315,8 +663,26 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
   // Site Financials: Income Given vs Total Expenses
   const siteFinancials = useMemo(() => {
-    const incomeLogs = siteLogsAll.filter(l => (l.incomeFromClient || 0) > 0);
-    const totalIncomeGiven = incomeLogs.reduce((sum, l) => sum + (l.incomeFromClient || 0), 0);
+    // 1. Income from Daily Logs
+    const logIncome = siteLogsAll.filter(l => (l.incomeFromClient || 0) > 0).map(l => ({
+      date: l.date,
+      staffName: l.staffName,
+      amount: l.incomeFromClient || 0,
+      notes: l.notes
+    }));
+
+    // 2. Income from Payment Milestones
+    const milestoneIncome = (site?.paymentStages || []).flatMap(stage => 
+      (stage.payments || []).map(p => ({
+        date: p.date,
+        staffName: 'Admin (Milestone)',
+        amount: p.amount,
+        notes: `[${stage.stageName}] ${p.note || ''}`
+      }))
+    );
+
+    const allIncomeLogs = [...logIncome, ...milestoneIncome].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const totalIncomeGiven = allIncomeLogs.reduce((sum, l) => sum + l.amount, 0);
 
     const logMaterialCost = siteLogsAll.reduce(
       (sum, l) => sum + (l.materials || []).reduce((s, m) => s + (m.cost || 0) * (m.quantity || 0), 0),
@@ -338,19 +704,33 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       0
     );
 
-    const totalSiteExpense = totalMaterialExpense + totalTransportExpense + totalMiscExpense;
+    const totalRentalExpense = (materialRentals || [])
+      .filter(r => r.siteId === siteId)
+      .reduce((sum, r) => {
+        if (r.totalRentalCost !== undefined && r.status === 'returned') {
+          return sum + r.totalRentalCost;
+        }
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const startMs = new Date(r.startDate + 'T00:00:00').getTime();
+        const endMs = new Date((r.endDate || todayStr) + 'T00:00:00').getTime();
+        const days = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+        return sum + (days * (r.quantity || 1) * (r.rentalRatePerDay || 0)) + (r.transitCost || 0);
+      }, 0);
+
+    const totalSiteExpense = totalMaterialExpense + totalTransportExpense + totalMiscExpense + totalRentalExpense;
     const netBalance = totalIncomeGiven - totalSiteExpense;
 
     return {
-      incomeLogs,
+      incomeLogs: allIncomeLogs,
       totalIncomeGiven,
       totalMaterialExpense,
       totalTransportExpense,
+      totalRentalExpense,
       totalMiscExpense,
       totalSiteExpense,
       netBalance
     };
-  }, [siteLogsAll, materialRequests, siteId]);
+  }, [siteLogsAll, materialRequests, materialRentals, siteId, site?.paymentStages]);
 
   const downloadSiteFinancialPDF = () => {
     if (!site) return;
@@ -365,32 +745,34 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     doc.setTextColor(40);
     doc.text('SITE FINANCIAL STATEMENT', 14, 28);
 
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setTextColor(100);
-    doc.text(`Site: ${site.name}`, 14, 35);
-    doc.text(`Client: ${site.clientName}`, 14, 41);
-    if (site.address) doc.text(`Address: ${site.address}`, 14, 47);
-    doc.text(`Generated on: ${format(new Date(), 'dd MMM yyyy, hh:mm a')}`, 14, site.address ? 53 : 47);
+    doc.text(`Site: ${site.name} | Client: ${site.clientName}`, 14, 35);
+    doc.text(`Generated on: ${format(new Date(), 'dd MMM yyyy, hh:mm a')}`, 14, 40);
 
     // Summary Box
-    const startY = site.address ? 58 : 52;
     doc.setDrawColor(220, 220, 220);
     doc.setFillColor(248, 248, 248);
-    doc.roundedRect(14, startY, 182, 34, 2, 2, 'FD');
+    doc.roundedRect(14, 44, 182, 38, 2, 2, 'FD');
 
-    doc.setFontSize(10);
+    const startY = 46;
+    doc.setFontSize(9);
     doc.setTextColor(40);
-    doc.text(`Site Budget: Rs ${(site.budget || 0).toLocaleString()}`, 20, startY + 8);
-    doc.text(`Total Income Given by Client: Rs ${siteFinancials.totalIncomeGiven.toLocaleString()}`, 20, startY + 16);
-    doc.text(`Total Site Expenses Incurred: Rs ${siteFinancials.totalSiteExpense.toLocaleString()}`, 20, startY + 24);
+    doc.text(`Client Income Received: Rs ${siteFinancials.totalIncomeGiven.toLocaleString()} (${siteFinancials.incomeLogs.length} logs)`, 20, startY + 7);
+    doc.text(`Total Site Expenses: Rs ${siteFinancials.totalSiteExpense.toLocaleString()} (All operational costs)`, 20, startY + 13);
+    doc.text(`- Materials: Rs ${siteFinancials.totalMaterialExpense.toLocaleString()}`, 25, startY + 18);
+    doc.text(`- Transport & Driver: Rs ${siteFinancials.totalTransportExpense.toLocaleString()}`, 25, startY + 22);
+    doc.text(`- Rental Products & Scaffolding: Rs ${siteFinancials.totalRentalExpense.toLocaleString()}`, 25, startY + 26);
+    doc.text(`- Incidentals / Tea / Misc: Rs ${siteFinancials.totalMiscExpense.toLocaleString()}`, 25, startY + 30);
 
     doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
     if (siteFinancials.netBalance >= 0) {
       doc.setTextColor(6, 95, 70);
-      doc.text(`Net In-Hand Balance: +Rs ${siteFinancials.netBalance.toLocaleString()} (Surplus)`, 20, startY + 31);
+      doc.text(`Net In-Hand Balance: +Rs ${siteFinancials.netBalance.toLocaleString()} (Surplus)`, 20, startY + 36);
     } else {
       doc.setTextColor(153, 27, 27);
-      doc.text(`Net Overspent / Due: -Rs ${Math.abs(siteFinancials.netBalance).toLocaleString()} (Due from Client)`, 20, startY + 31);
+      doc.text(`Net Overspent / Due: -Rs ${Math.abs(siteFinancials.netBalance).toLocaleString()} (Due from Client)`, 20, startY + 36);
     }
 
     // Expense Breakdown Table
@@ -398,6 +780,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     const expBody = [
       ['Materials Expense', siteFinancials.totalMaterialExpense.toLocaleString(), 'Site daily logs + dispatch requisitions'],
       ['Transport & Vehicle Expense', siteFinancials.totalTransportExpense.toLocaleString(), 'Staff travel + driver transit & petrol'],
+      ['Rental Equipment & Products', siteFinancials.totalRentalExpense.toLocaleString(), 'Scaffolding, machines & rental items deployed to site'],
       ['Site Miscellaneous Expenses', siteFinancials.totalMiscExpense.toLocaleString(), 'Food, tea, tools & site incidentals'],
       ['TOTAL SITE EXPENSES', siteFinancials.totalSiteExpense.toLocaleString(), 'All operational site costs combined']
     ];
@@ -414,7 +797,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         1: { halign: 'right', fontStyle: 'bold', cellWidth: 40 },
         2: { cellWidth: 82 }
       },
-      didParseCell: function(data) {
+      didParseCell: function (data) {
         if (data.row.index === expBody.length - 1) {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.fillColor = [254, 243, 199];
@@ -432,11 +815,11 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     const incBody = siteFinancials.incomeLogs.length === 0
       ? [['-', 'No income logged from client yet', '0', '-']]
       : siteFinancials.incomeLogs.map(l => [
-          format(new Date(l.date), 'dd MMM yyyy'),
-          l.staffName,
-          l.incomeFromClient.toLocaleString(),
-          l.notes || '-'
-        ]);
+        format(new Date(l.date), 'dd MMM yyyy'),
+        l.staffName,
+        l.amount.toLocaleString(),
+        l.notes || '-'
+      ]);
 
     autoTable(doc, {
       startY: lastY + 16,
@@ -509,6 +892,92 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     doc.save(`${reportModal.title.replace(/ /g, '_')}_${format(new Date(), 'yyyyMMdd')}.pdf`);
   };
 
+  const downloadSiteHistoryPDF = () => {
+    if (!site) return;
+    const doc = new jsPDF();
+
+    // Company Header
+    doc.setFontSize(18);
+    doc.setTextColor(184, 117, 26);
+    doc.text('JGS INTERIOR & CONSTRUCTION', 14, 20);
+
+    doc.setFontSize(12);
+    doc.setTextColor(40);
+    doc.text(`SITE ACTIVITY & EXPENSE REPORT (${format(new Date(fromDate + 'T00:00:00'), 'dd MMM yyyy')} - ${format(new Date(toDate + 'T00:00:00'), 'dd MMM yyyy')})`, 14, 28);
+
+    doc.setFontSize(9);
+    doc.setTextColor(100);
+    doc.text(`Site: ${site.name} | Client: ${site.clientName}`, 14, 35);
+    doc.text(`Report Generated: ${format(new Date(), 'dd MMM yyyy, hh:mm a')}`, 14, 40);
+
+    // Summary Box
+    doc.setDrawColor(220, 220, 220);
+    doc.setFillColor(248, 248, 248);
+    doc.roundedRect(14, 44, 182, 28, 2, 2, 'FD');
+
+    doc.setFontSize(9);
+    doc.setTextColor(40);
+    doc.text(`Active Days: ${rangeHistoryData.totalActiveDays} Days`, 20, 52);
+    doc.text(`Total Workforce: ${rangeHistoryData.totalManDays} Man-Days (${rangeHistoryData.totalStaffDays} Staff + ${rangeHistoryData.totalCrewDays} Crew)`, 20, 58);
+    doc.text(`Total Expenses: Rs ${rangeHistoryData.totalExpenses.toLocaleString()} (Mat: Rs ${rangeHistoryData.totalMaterialsCost.toLocaleString()}, Trnsp: Rs ${rangeHistoryData.totalTransportCost.toLocaleString()}, Misc: Rs ${rangeHistoryData.totalMiscCost.toLocaleString()})`, 20, 64);
+
+    doc.text(`Client Income Received: Rs ${rangeHistoryData.totalIncome.toLocaleString()}`, 115, 52);
+    const isSurplus = rangeHistoryData.rangeNetBalance >= 0;
+    doc.setTextColor(isSurplus ? 6 : 153, isSurplus ? 95 : 27, isSurplus ? 70 : 27);
+    doc.text(`Net Period Balance: ${isSurplus ? '+' : ''}Rs ${rangeHistoryData.rangeNetBalance.toLocaleString()}`, 115, 58);
+
+    // Daily breakdown table
+    const head = [['Date', 'Employees Coming', 'Expenses (Rs)', 'Materials Used', 'Client Income (Rs)', 'Notes / Summary']];
+    const body = rangeHistoryData.days.map(d => {
+      const staffNames = d.namedStaff.map(s => `${s.name} (${s.role})`).join(', ');
+      const crewParts = [];
+      if (d.painterCount > 0) crewParts.push(`${d.painterCount} Painter`);
+      if (d.plumberCount > 0) crewParts.push(`${d.plumberCount} Plumber`);
+      if (d.labourCount > 0) crewParts.push(`${d.labourCount} Labour`);
+      const crewStr = crewParts.length > 0 ? `Crew: ${crewParts.join(', ')}` : '';
+      const empStr = `${d.totalWorkers} Total\n${[staffNames, crewStr].filter(Boolean).join('\n')}`;
+
+      const expParts = [];
+      if (d.dayMaterialsCost > 0) expParts.push(`Mat: Rs ${d.dayMaterialsCost.toLocaleString()}`);
+      if (d.dayTransportCost > 0) expParts.push(`Trnsp: Rs ${d.dayTransportCost.toLocaleString()}`);
+      if (d.dayMiscCost > 0) expParts.push(`Misc: Rs ${d.dayMiscCost.toLocaleString()}`);
+      const expStr = `Total: Rs ${d.dayTotalExpense.toLocaleString()}\n${expParts.join('\n')}`;
+
+      const matStr = d.materialsList.map(m => `${m.name} × ${m.quantity}`).join(', ') || '-';
+      const incStr = d.dayTotalIncome > 0 ? `+Rs ${d.dayTotalIncome.toLocaleString()}` : '-';
+      const notes = d.logs.map(l => l.notes).filter(Boolean).join('; ') || '-';
+
+      return [
+        format(new Date(d.date + 'T00:00:00'), 'dd MMM yyyy'),
+        empStr,
+        expStr,
+        matStr,
+        incStr,
+        notes
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 76,
+      head: head,
+      body: body.length === 0 ? [['-', 'No activity in this range', '-', '-', '-', '-']] : body,
+      theme: 'grid',
+      headStyles: { fillColor: [184, 117, 26], fontSize: 8, fontStyle: 'bold' },
+      bodyStyles: { fontSize: 8 },
+      columnStyles: {
+        0: { cellWidth: 24 },
+        1: { cellWidth: 42 },
+        2: { cellWidth: 32 },
+        3: { cellWidth: 30 },
+        4: { cellWidth: 24, halign: 'right' },
+        5: { cellWidth: 30 }
+      }
+    });
+
+    const safeSite = site.name.replace(/[^a-zA-Z0-9]/g, '_');
+    doc.save(`${safeSite}_History_${fromDate}_to_${toDate}.pdf`);
+  };
+
   if (!site) return null;
 
   return (
@@ -543,15 +1012,16 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
             <button
               key={st}
               onClick={() => updateSite(site.id, { status: st })}
-              className={`text-[10px] font-semibold px-2.5 py-1 rounded-full capitalize transition-all ${
-                site.status === st ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground'
-              }`}
+              className={`text-[10px] font-semibold px-2.5 py-1 rounded-full capitalize transition-all ${site.status === st ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground'
+                }`}
             >
               {st}
             </button>
           ))}
         </div>
       </div>
+
+      <SitePaymentMilestones site={site} updateSite={updateSite} paymentStageMaster={paymentStageMaster} />
 
       {/* Site Financial Statement: Income Given vs Total Expenses */}
       <Card className="p-4 sm:p-5 rounded-2xl bg-card border border-border/70 shadow-sm space-y-4">
@@ -602,22 +1072,20 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
               ₹{siteFinancials.totalSiteExpense.toLocaleString()}
             </div>
             <p className="text-[11px] text-muted-foreground">
-              Materials + Transport + Incidentals
+              Materials + Transport + Rentals + Incidentals
             </p>
           </div>
 
           {/* Net In-Hand / Surplus or Deficit */}
-          <div className={`p-3.5 rounded-xl border space-y-1 ${
-            siteFinancials.netBalance >= 0
+          <div className={`p-3.5 rounded-xl border space-y-1 ${siteFinancials.netBalance >= 0
               ? 'bg-primary/10 border-primary/25'
               : 'bg-amber-500/10 border-amber-500/25'
-          }`}>
+            }`}>
             <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
               ⚖️ Net Balance (Income − Expenses)
             </span>
-            <div className={`text-2xl font-heading font-extrabold ${
-              siteFinancials.netBalance >= 0 ? 'text-primary' : 'text-amber-700 dark:text-amber-400'
-            }`}>
+            <div className={`text-2xl font-heading font-extrabold ${siteFinancials.netBalance >= 0 ? 'text-primary' : 'text-amber-700 dark:text-amber-400'
+              }`}>
               {siteFinancials.netBalance >= 0 ? '+' : ''}₹{siteFinancials.netBalance.toLocaleString()}
             </div>
             <p className="text-[11px] text-muted-foreground">
@@ -627,18 +1095,24 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         </div>
 
         {/* Expense Category Breakdown Pills */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-border/30 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-border/30 text-xs">
           <div className="flex justify-between items-center p-2 rounded-lg bg-muted/40 border border-border/40">
-            <span className="text-muted-foreground">🧱 Materials Cost:</span>
-            <strong className="text-foreground">₹{siteFinancials.totalMaterialExpense.toLocaleString()}</strong>
+            <span className="text-muted-foreground">🧱 Materials:</span>
+            <strong className="text-foreground font-mono">₹{siteFinancials.totalMaterialExpense.toLocaleString()}</strong>
           </div>
           <div className="flex justify-between items-center p-2 rounded-lg bg-muted/40 border border-border/40">
-            <span className="text-muted-foreground">🚚 Transport & Vehicle:</span>
-            <strong className="text-foreground">₹{siteFinancials.totalTransportExpense.toLocaleString()}</strong>
+            <span className="text-muted-foreground">🚚 Transport:</span>
+            <strong className="text-foreground font-mono">₹{siteFinancials.totalTransportExpense.toLocaleString()}</strong>
+          </div>
+          <div className="flex justify-between items-center p-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+            <span className="text-amber-800 dark:text-amber-300 font-semibold flex items-center gap-1">
+              <RefreshCw className="w-3 h-3 text-amber-600" /> Rentals:
+            </span>
+            <strong className="text-amber-700 dark:text-amber-400 font-mono">₹{siteFinancials.totalRentalExpense.toLocaleString()}</strong>
           </div>
           <div className="flex justify-between items-center p-2 rounded-lg bg-muted/40 border border-border/40">
-            <span className="text-muted-foreground">☕ Miscellaneous / Food:</span>
-            <strong className="text-foreground">₹{siteFinancials.totalMiscExpense.toLocaleString()}</strong>
+            <span className="text-muted-foreground">☕ Incidentals:</span>
+            <strong className="text-foreground font-mono">₹{siteFinancials.totalMiscExpense.toLocaleString()}</strong>
           </div>
         </div>
       </Card>
@@ -737,24 +1211,22 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                 return (
                   <div
                     key={req.id}
-                    className={`p-3.5 rounded-2xl border text-xs space-y-2.5 transition-all ${
-                      isAssigned
+                    className={`p-3.5 rounded-2xl border text-xs space-y-2.5 transition-all ${isAssigned
                         ? 'bg-blue-500/5 border-blue-500/30'
                         : isPending
-                        ? 'bg-amber-500/5 border-amber-500/30'
-                        : 'bg-card border-border/60'
-                    }`}
+                          ? 'bg-amber-500/5 border-amber-500/30'
+                          : 'bg-card border-border/60'
+                      }`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2">
                       <div className="flex items-center gap-2">
                         <span
-                          className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 ${
-                            isAssigned
+                          className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 ${isAssigned
                               ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400'
                               : isPending
-                              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
-                              : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                          }`}
+                                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                            }`}
                         >
                           {isAssigned && <Truck className="w-3 h-3" />}
                           {isPending && <Clock className="w-3 h-3" />}
@@ -817,13 +1289,44 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                       {req.vehicleName && (
                         <span>🚗 Vehicle: <strong className="text-foreground">{req.vehicleName}</strong></span>
                       )}
-                      {req.supplierPrice ? (
-                        <span>Supplier Bill: <strong className="text-emerald-700 dark:text-emerald-400 font-mono">₹{req.supplierPrice.toLocaleString()}</strong></span>
-                      ) : null}
-                      {req.clientTotalCost ? (
-                        <span>Client Bill: <strong className="text-primary font-mono">₹{req.clientTotalCost.toLocaleString()}</strong></span>
-                      ) : null}
                     </div>
+                      {req.supplierPrice !== undefined ? (
+                        <div className="w-full mt-2 border-t border-border/40 pt-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[11px] font-black text-foreground uppercase tracking-wider">Site Total Bill</span>
+                            <span className="font-bold text-primary text-sm font-mono">₹{req.supplierPrice.toLocaleString()}</span>
+                          </div>
+                          
+                          <div className="p-3 bg-muted/30 rounded-xl border border-border/50 space-y-1.5 text-[11px]">
+                            <div className="flex justify-between items-center text-muted-foreground">
+                              <span>Material Subtotal:</span>
+                              <span className="font-mono font-semibold text-foreground">
+                                ₹{((req.supplierPrice || 0) - (req.gstAmount || 0)).toLocaleString()}
+                              </span>
+                            </div>
+                            
+                            {(req.gstAmount || 0) > 0 && (
+                              req.gstType === 'inter-state' ? (
+                                <div className="flex justify-between items-center text-muted-foreground">
+                                  <span>IGST ({req.igstRate || 0}%):</span>
+                                  <span className="font-mono font-semibold text-foreground">₹{req.gstAmount?.toLocaleString()}</span>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex justify-between items-center text-muted-foreground">
+                                    <span>CGST ({req.cgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                    <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                  </div>
+                                  <div className="flex justify-between items-center text-muted-foreground">
+                                    <span>SGST ({req.sgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                    <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                  </div>
+                                </>
+                              )
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
 
                     {req.notes && (
                       <p className="text-[11px] text-muted-foreground italic bg-muted/40 px-2.5 py-1 rounded-lg">
@@ -836,6 +1339,175 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── SITE RENTAL PRODUCTS & EQUIPMENT TRACKER ── */}
+      <div className="bg-card p-4 rounded-2xl border border-border/70 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-border/50">
+          <div>
+            <div className="flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-amber-600" />
+              <h4 className="text-sm font-heading font-black text-foreground uppercase tracking-wide">
+                Rental Products & Equipment on Site
+              </h4>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/25">
+                {activeSiteRentals.length} Active
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Scaffolding, machinery, and daily rental tools deployed to this site.
+            </p>
+          </div>
+
+          <Button
+            size="sm"
+            onClick={() => {
+              setRentalMatId('');
+              setRentalMatName('');
+              setRentalQuantity('1');
+              setRentalRatePerDay('');
+              setRentalStartDate(today);
+              setRentalRequiresDriver(false);
+              setShowDeployRental(true);
+            }}
+            className="h-8 rounded-xl text-xs font-bold gap-1.5 text-white shadow-xs self-start sm:self-auto bg-amber-600 hover:bg-amber-700"
+          >
+            <Plus className="w-3.5 h-3.5" /> Deploy Rental to Site
+          </Button>
+        </div>
+
+        {/* Quick Summary Pill Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-muted/40 rounded-xl border border-border/40 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-muted-foreground">Active Deployments:</span>
+            <strong className="text-foreground font-mono">{activeSiteRentals.length} items</strong>
+            <span className="text-muted-foreground">•</span>
+            <span className="font-semibold text-muted-foreground">Past / Settled:</span>
+            <strong className="text-foreground font-mono">{returnedSiteRentals.length} records</strong>
+          </div>
+
+          <div className="text-xs font-bold text-foreground">
+            Total Site Rental Cost: <span className="font-mono text-amber-600 dark:text-amber-400">₹{siteFinancials.totalRentalExpense.toLocaleString()}</span>
+          </div>
+        </div>
+
+        {/* Active Rentals List */}
+        {activeSiteRentals.length === 0 ? (
+          <div className="p-4 rounded-xl bg-muted/20 border border-border/40 text-center text-xs text-muted-foreground space-y-1">
+            <p className="font-semibold text-foreground">No active rental materials currently on this site</p>
+            <p className="text-[11px]">Click "Deploy Rental to Site" to dispatch scaffolding, generators, or machines.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {activeSiteRentals.map(rental => {
+              const startMs = new Date(rental.startDate + 'T00:00:00').getTime();
+              const endMs = new Date(today + 'T00:00:00').getTime();
+              const daysActive = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+              const runningRent = (daysActive * rental.quantity * (rental.rentalRatePerDay || 0)) + (rental.transitCost || 0);
+
+              return (
+                <div
+                  key={rental.id}
+                  className="p-3.5 rounded-2xl bg-card border border-amber-500/30 shadow-2xs space-y-2.5 transition-all hover:border-amber-500/50"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border/40 pb-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-heading font-bold text-sm text-foreground">{rental.materialName}</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-400 uppercase tracking-wide">
+                          Active On Site
+                        </span>
+                        <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary">
+                          {rental.quantity} {rental.unit}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground mt-1">
+                        <span>📅 Deployed: <strong className="text-foreground font-mono">{rental.startDate}</strong></span>
+                        <span>•</span>
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-300 font-semibold">
+                          ⏱️ {daysActive} {daysActive === 1 ? 'day' : 'days'} on site
+                        </span>
+                        <span>•</span>
+                        <span>Daily Rate: <strong className="text-foreground font-mono">₹{rental.rentalRatePerDay || 0}</strong> / day per {rental.unit}</span>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-[10px] text-muted-foreground block">Running Total:</span>
+                      <span className="font-heading font-extrabold text-sm text-amber-600 dark:text-amber-400 font-mono">
+                        ₹{runningRent.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {rental.requiresDriver && (
+                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground bg-muted/30 p-2 rounded-xl border border-border/40">
+                      <span className="flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-blue-500" /> Driver: <strong className="text-foreground">{rental.driverName || 'Assigned'}</strong>
+                      </span>
+                      {rental.vehicleNumber && (
+                        <span>Vehicle: <strong className="text-foreground">{rental.vehicleNumber}</strong></span>
+                      )}
+                      {rental.transitCost ? (
+                        <span>Transit Allowance: <strong className="text-foreground font-mono">₹{rental.transitCost.toLocaleString()}</strong></span>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {rental.notes && (
+                    <p className="text-[11px] text-muted-foreground italic bg-muted/40 px-2.5 py-1 rounded-lg">
+                      "{rental.notes}"
+                    </p>
+                  )}
+
+                  <div className="flex justify-end pt-1">
+                    <Button
+                      size="sm"
+                      onClick={() => openReturnRentalModal(rental)}
+                      className="h-8 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-2xs gap-1.5"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Mark Returned & Settle Rental
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Returned / Settled Rentals History */}
+        {returnedSiteRentals.length > 0 && (
+          <div className="space-y-2 pt-2 border-t border-border/40">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Settled / Returned Rentals History ({returnedSiteRentals.length})
+            </span>
+
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {returnedSiteRentals.map(r => (
+                <div key={r.id} className="p-3 rounded-xl bg-muted/20 border border-border/50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div>
+                    <span className="font-bold text-foreground mr-2">{r.materialName}</span>
+                    <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md bg-muted text-muted-foreground">
+                      {r.quantity} {r.unit}
+                    </span>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Duration: {r.startDate} to {r.endDate} ({r.totalDays || 1} {r.totalDays === 1 ? 'day' : 'days'}) @ ₹{r.rentalRatePerDay}/day
+                      {r.transitCost ? ` + ₹${r.transitCost} transit` : ''}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <span className="font-bold text-xs text-foreground font-mono block">
+                      ₹{(r.totalRentalCost || 0).toLocaleString()}
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                      Settled
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Add Work Entry Toggle */}
@@ -1070,90 +1742,424 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         )}
       </div>
 
-      {/* Date Range Filter for Site History */}
-      <div className="bg-card p-3 rounded-2xl border border-border/50 flex flex-wrap items-center gap-3">
-        <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">History Range:</span>
-        <div className="flex items-center gap-2">
-          <Input
-            type="date"
-            value={fromDate}
-            onChange={e => setFromDate(e.target.value)}
-            className="h-8 w-32 rounded-lg text-xs"
-          />
-          <span className="text-xs text-muted-foreground">to</span>
-          <Input
-            type="date"
-            value={toDate}
-            onChange={e => setToDate(e.target.value)}
-            className="h-8 w-32 rounded-lg text-xs"
-          />
+      {/* Date Range Filter & History Header */}
+      <div className="bg-card p-4 rounded-2xl border border-border/60 shadow-xs space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h4 className="font-heading font-bold text-sm text-foreground flex items-center gap-2">
+              <CalendarDays className="w-4 h-4 text-primary" />
+              Site Work & Expense History
+            </h4>
+            <p className="text-[11px] text-muted-foreground">
+              Daily employee attendance, crew counts, itemized expenses, and client collections
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={downloadSiteHistoryPDF}
+              className="h-8 rounded-xl text-xs gap-1.5 font-semibold text-primary border-primary/30 hover:bg-primary/5"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              Export History (PDF)
+            </Button>
+          </div>
+        </div>
+
+        {/* Date Inputs + Quick Preset Pills */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/40">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Range:</span>
+            <Input
+              type="date"
+              value={fromDate}
+              onChange={e => setFromDate(e.target.value)}
+              className="h-8 w-32 rounded-lg text-xs"
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <Input
+              type="date"
+              value={toDate}
+              onChange={e => setToDate(e.target.value)}
+              className="h-8 w-32 rounded-lg text-xs"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                setFromDate(format(new Date(Date.now() - 7 * 86400000), 'yyyy-MM-dd'));
+                setToDate(today);
+              }}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Last 7 Days
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFromDate(format(new Date(Date.now() - 30 * 86400000), 'yyyy-MM-dd'));
+                setToDate(today);
+              }}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Last 30 Days
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFromDate(format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), 'yyyy-MM-dd'));
+                setToDate(today);
+              }}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            >
+              This Month
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFromDate(defaultFromDate);
+                setToDate(today);
+              }}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            >
+              All Time
+            </button>
+          </div>
+        </div>
+
+        {/* Selected Range Summary Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-border/40">
+          <div className="p-2.5 rounded-xl bg-blue-500/5 border border-blue-500/15">
+            <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-300 block">Active Days</span>
+            <span className="font-heading font-bold text-base text-foreground">
+              {rangeHistoryData.totalActiveDays} <span className="text-xs font-normal text-muted-foreground">Days</span>
+            </span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-amber-500/5 border border-amber-500/15">
+            <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-300 block">Total Workforce</span>
+            <span className="font-heading font-bold text-base text-foreground">
+              {rangeHistoryData.totalManDays} <span className="text-xs font-normal text-muted-foreground">Man-Days</span>
+            </span>
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              {rangeHistoryData.totalStaffDays} Staff • {rangeHistoryData.totalCrewDays} Crew
+            </div>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-rose-500/5 border border-rose-500/15">
+            <span className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-300 block">Total Expenses</span>
+            <span className="font-heading font-bold text-base text-destructive">
+              ₹{rangeHistoryData.totalExpenses.toLocaleString()}
+            </span>
+            <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+              Mat: ₹{rangeHistoryData.totalMaterialsCost.toLocaleString()} • Trnsp: ₹{rangeHistoryData.totalTransportCost.toLocaleString()}
+            </div>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/15">
+            <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-300 block">Client Income</span>
+            <span className="font-heading font-bold text-base text-emerald-600">
+              ₹{rangeHistoryData.totalIncome.toLocaleString()}
+            </span>
+            <div className={`text-[10px] font-semibold mt-0.5 ${rangeHistoryData.rangeNetBalance >= 0 ? 'text-emerald-600' : 'text-destructive'}`}>
+              Net: {rangeHistoryData.rangeNetBalance >= 0 ? '+' : ''}₹{rangeHistoryData.rangeNetBalance.toLocaleString()}
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Grouped Logs by Date */}
       <div className="space-y-4">
-        {Object.keys(groupedLogs).length === 0 ? (
-          <div className="text-center py-10 bg-card rounded-2xl border border-border/50 text-muted-foreground text-xs">
+        {rangeHistoryData.days.length === 0 ? (
+          <div className="text-center py-12 bg-card rounded-2xl border border-border/50 text-muted-foreground text-xs">
             <Clock className="w-8 h-8 mx-auto mb-2 opacity-30" />
-            <p>No work logs found for this date range.</p>
+            <p className="font-medium text-foreground">No site activity or logs found</p>
+            <p className="text-[11px] text-muted-foreground mt-1">Try expanding the date range above to view earlier records.</p>
           </div>
         ) : (
-          Object.entries(groupedLogs).map(([date, logs]) => (
-            <Card key={date} className="p-4 rounded-2xl bg-card border border-border/60 shadow-xs space-y-3">
-              <div className="flex items-center justify-between pb-2 border-b border-border/40">
+          rangeHistoryData.days.map(day => (
+            <Card key={day.date} className="p-4 rounded-2xl bg-card border border-border/60 shadow-xs space-y-3.5">
+              {/* Day Header */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-border/40">
                 <div className="flex items-center gap-2">
-                  <CalendarDays className="w-4 h-4 text-primary" />
-                  <span className="font-heading font-bold text-sm text-foreground">
-                    {format(new Date(date + 'T00:00:00'), 'EEEE, dd MMMM yyyy')}
+                  <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+                    <CalendarDays className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="font-heading font-bold text-sm text-foreground block leading-tight">
+                      {format(new Date(day.date + 'T00:00:00'), 'EEEE, dd MMMM yyyy')}
+                    </span>
+                    <span className="text-[10px] font-semibold text-muted-foreground font-mono">
+                      {day.logs.length} {day.logs.length === 1 ? 'work entry' : 'work entries'}
+                      {day.dayRequests.length > 0 ? ` • ${day.dayRequests.length} dispatch` : ''}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Day Summary Badges */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {/* Workers Count Badge */}
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 font-bold text-xs border border-blue-500/20">
+                    <Users className="w-3.5 h-3.5" />
+                    {day.totalWorkers} {day.totalWorkers === 1 ? 'Worker' : 'Workers'}
+                  </span>
+
+                  {/* Daily Expenses Badge */}
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-700 dark:text-rose-300 font-bold text-xs border border-rose-500/20">
+                    <TrendingDown className="w-3.5 h-3.5" />
+                    ₹{day.dayTotalExpense.toLocaleString()}
+                  </span>
+
+                  {/* Daily Income Badge (if any) */}
+                  {day.dayTotalIncome > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold text-xs border border-emerald-500/20">
+                      <IndianRupee className="w-3.5 h-3.5" />
+                      +₹{day.dayTotalIncome.toLocaleString()}
+                    </span>
+                  )}
+
+                  {/* Day Net Balance */}
+                  <span className={`inline-flex items-center px-2 py-1 rounded-lg text-[10px] font-bold border ${
+                    day.dayNetBalance >= 0
+                      ? 'bg-emerald-500/5 text-emerald-600 border-emerald-500/20'
+                      : 'bg-muted/80 text-muted-foreground border-border/50'
+                  }`}>
+                    Net: {day.dayNetBalance >= 0 ? '+' : ''}₹{day.dayNetBalance.toLocaleString()}
                   </span>
                 </div>
-                <span className="text-xs font-bold text-muted-foreground font-mono">
-                  {logs.length} {logs.length === 1 ? 'entry' : 'entries'}
-                </span>
               </div>
 
-              <div className="space-y-2">
-                {logs.map(log => (
-                  <div key={log.id} className="p-3 bg-muted/30 rounded-xl border border-border/40 text-xs space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-foreground flex items-center gap-1.5">
-                        <UserCircle className="w-3.5 h-3.5 text-primary" /> {log.staffName}
+              {/* SECTION 1: WORKFORCE ON SITE */}
+              <div className="p-3 bg-muted/20 rounded-xl border border-border/40 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-foreground flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-primary" />
+                    Workforce on Site ({day.totalWorkers} Total)
+                  </span>
+                  <span className="text-[11px] text-muted-foreground font-medium">
+                    {day.namedStaff.length} Staff • {day.totalCrew} Crew Members
+                  </span>
+                </div>
+
+                {/* Named Staff Chips */}
+                {day.namedStaff.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 items-center">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mr-1">Staff:</span>
+                    {day.namedStaff.map(s => (
+                      <span
+                        key={s.id}
+                        className="inline-flex items-center gap-1 bg-card px-2 py-1 rounded-lg text-xs font-semibold border border-border/60 shadow-2xs"
+                      >
+                        <UserCircle className="w-3.5 h-3.5 text-primary" />
+                        <span>{s.name}</span>
+                        <span className="text-[10px] text-muted-foreground font-normal">({s.role})</span>
                       </span>
-                      {log.incomeFromClient > 0 && (
-                        <span className="text-emerald-600 font-bold bg-emerald-500/10 px-2 py-0.5 rounded">
-                          +₹{log.incomeFromClient.toLocaleString()}
-                        </span>
-                      )}
-                    </div>
+                    ))}
+                  </div>
+                )}
 
-                    {log.workerIds && log.workerIds.length > 0 && (
-                      <div className="flex flex-wrap gap-1 items-center pt-0.5">
-                        <span className="text-[10px] text-muted-foreground font-semibold">Staff on site:</span>
-                        {log.workerIds.map(wId => {
-                          const wStaff = staffList.find(s => s.id === wId);
-                          return wStaff ? (
-                            <span key={wId} className="bg-primary/10 text-primary px-1.5 py-0.5 rounded text-[10px] font-medium border border-primary/20">
-                              {wStaff.name} ({wStaff.role})
-                            </span>
-                          ) : null;
-                        })}
-                      </div>
+                {/* Crew Breakdown Chips */}
+                {day.totalCrew > 0 && (
+                  <div className="flex flex-wrap gap-1.5 items-center pt-1 border-t border-border/30">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mr-1">Crew:</span>
+                    {day.painterCount > 0 && (
+                      <span className="bg-amber-500/10 text-amber-800 dark:text-amber-200 border border-amber-500/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
+                        🎨 {day.painterCount} {day.painterCount === 1 ? 'Painter' : 'Painters'}
+                      </span>
                     )}
+                    {day.plumberCount > 0 && (
+                      <span className="bg-sky-500/10 text-sky-800 dark:text-sky-200 border border-sky-500/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
+                        🔧 {day.plumberCount} {day.plumberCount === 1 ? 'Plumber' : 'Plumbers'}
+                      </span>
+                    )}
+                    {day.labourCount > 0 && (
+                      <span className="bg-orange-500/10 text-orange-800 dark:text-orange-200 border border-orange-500/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
+                        🔨 {day.labourCount} {day.labourCount === 1 ? 'Labourer' : 'Labourers'}
+                      </span>
+                    )}
+                  </div>
+                )}
 
-                    {log.materials && log.materials.length > 0 && (
-                      <div className="flex flex-wrap gap-1 pt-1">
-                        {log.materials.map((m, mIdx) => (
-                          <span key={mIdx} className="bg-card px-2 py-0.5 rounded text-[11px] font-medium border border-border/50">
-                            {m.name} × {m.quantity}
-                          </span>
+                {day.totalWorkers === 0 && (
+                  <p className="text-[11px] text-muted-foreground italic">No staff or crew logged for this date.</p>
+                )}
+              </div>
+
+              {/* SECTION 2: COST & EXPENSES BREAKDOWN */}
+              <div className="p-3 bg-muted/20 rounded-xl border border-border/40 space-y-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-foreground flex items-center gap-1.5">
+                    <TrendingDown className="w-3.5 h-3.5 text-destructive" />
+                    Daily Costs & Expenses (₹{day.dayTotalExpense.toLocaleString()} Total)
+                  </span>
+                  <div className="flex items-center gap-2 text-[10px] font-semibold text-muted-foreground">
+                    <span>Materials: ₹{day.dayMaterialsCost.toLocaleString()}</span>
+                    <span>•</span>
+                    <span>Transport: ₹{day.dayTransportCost.toLocaleString()}</span>
+                    <span>•</span>
+                    <span>Misc: ₹{day.dayMiscCost.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {/* Column A: Materials Used */}
+                  <div className="p-2 rounded-lg bg-card border border-border/50 text-xs space-y-1">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase flex items-center justify-between">
+                      <span>Materials Used</span>
+                      <span className="text-foreground font-semibold">₹{day.dayMaterialsCost.toLocaleString()}</span>
+                    </span>
+                    {day.materialsList.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground italic">No materials logged</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {day.materialsList.map((m, mIdx) => (
+                          <div key={mIdx} className="flex items-center justify-between text-[11px]">
+                            <span className="truncate">{m.name} × {m.quantity}</span>
+                            {m.total > 0 && (
+                              <span className="font-semibold text-muted-foreground shrink-0">₹{m.total.toLocaleString()}</span>
+                            )}
+                          </div>
                         ))}
                       </div>
                     )}
-
-                    {log.notes && <p className="text-muted-foreground italic text-[11px]">"{log.notes}"</p>}
                   </div>
-                ))}
+
+                  {/* Column B: Transport & Travel */}
+                  <div className="p-2 rounded-lg bg-card border border-border/50 text-xs space-y-1">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase flex items-center justify-between">
+                      <span>Transport & Travel</span>
+                      <span className="text-foreground font-semibold">₹{day.dayTransportCost.toLocaleString()}</span>
+                    </span>
+                    {day.dayTransportCost === 0 ? (
+                      <p className="text-[11px] text-muted-foreground italic">No transport costs</p>
+                    ) : (
+                      <div className="space-y-1 text-[11px]">
+                        {day.logTransportCost > 0 && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Staff Site Travel:</span>
+                            <span className="font-semibold">₹{day.logTransportCost.toLocaleString()}</span>
+                          </div>
+                        )}
+                        {day.reqTransportCost > 0 && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Requisition Transit & Fuel:</span>
+                            <span className="font-semibold">₹{day.reqTransportCost.toLocaleString()}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Column C: Miscellaneous Incidentals */}
+                  <div className="p-2 rounded-lg bg-card border border-border/50 text-xs space-y-1">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase flex items-center justify-between">
+                      <span>Site Misc Expenses</span>
+                      <span className="text-foreground font-semibold">₹{day.dayMiscCost.toLocaleString()}</span>
+                    </span>
+                    {day.miscExpensesList.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground italic">No misc expenses</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {day.miscExpensesList.map((e, eIdx) => (
+                          <div key={eIdx} className="flex items-center justify-between text-[11px]">
+                            <span className="capitalize text-muted-foreground truncate">{e.itemName}:</span>
+                            <span className="font-semibold text-destructive shrink-0">₹{e.amount.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
+
+              {/* SECTION 3: MATERIAL REQUISITIONS / DELIVERIES ARRIVED */}
+              {day.dayRequests.length > 0 && (
+                <div className="p-3 bg-muted/20 rounded-xl border border-border/40 space-y-1.5">
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-primary" />
+                    Material Dispatches Delivered ({day.dayRequests.length})
+                  </span>
+                  <div className="space-y-1.5">
+                    {day.dayRequests.map(r => (
+                      <div key={r.id} className="p-2 bg-card rounded-lg border border-border/50 text-xs flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-medium">
+                            {r.items.map(it => `${it.name} (${it.quantity} ${it.unit})`).join(', ')}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5">
+                            {r.sourceType === 'site' ? `Transferred from ${r.sourceSiteName}` : `Supplier: ${r.supplierName || 'Direct'}`}
+                            {r.driverName ? ` • Driver: ${r.driverName} (${r.vehicle || 'Vehicle'})` : ''}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-bold text-destructive">
+                            ₹{( (r.materialCost || r.supplierPrice || 0) + (r.driverCost || 0) + (r.petrolCharge || 0) ).toLocaleString()}
+                          </span>
+                          <span className="text-[10px] block text-emerald-600 font-semibold capitalize">{r.status}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION 4: CLIENT INCOME RECEIVED */}
+              {day.dayTotalIncome > 0 && (
+                <div className="p-3 bg-emerald-500/5 rounded-xl border border-emerald-500/20 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-600">
+                      <IndianRupee className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <span className="font-bold text-emerald-800 dark:text-emerald-200 block">
+                        Income Received from Client
+                      </span>
+                      {day.dayMilestonePayments.map((p, pIdx) => (
+                        <span key={pIdx} className="text-[11px] text-muted-foreground block">
+                          Milestone [{p.stageName}]: ₹{p.amount.toLocaleString()} {p.note ? `(${p.note})` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="font-heading font-bold text-sm text-emerald-600">
+                    +₹{day.dayTotalIncome.toLocaleString()}
+                  </span>
+                </div>
+              )}
+
+              {/* SECTION 5: WORK LOG ENTRIES & NOTES */}
+              {day.logs.length > 0 && (
+                <div className="space-y-1.5 pt-1 border-t border-border/30">
+                  <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                    Detailed Work Logs & Descriptions:
+                  </span>
+                  {day.logs.map((log, lIdx) => (
+                    <div key={log.id || lIdx} className="p-2.5 bg-muted/10 rounded-lg border border-border/30 text-xs space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-foreground flex items-center gap-1.5">
+                          <UserCircle className="w-3.5 h-3.5 text-primary" />
+                          {log.staffName}
+                        </span>
+                        {log.incomeFromClient > 0 && (
+                          <span className="text-emerald-600 font-bold bg-emerald-500/10 px-2 py-0.5 rounded text-[11px]">
+                            +₹{log.incomeFromClient.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+
+                      {log.notes && (
+                        <p className="text-muted-foreground text-xs whitespace-pre-line bg-card/60 p-2 rounded-md border border-border/40">
+                          {log.notes}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </Card>
           ))
         )}
@@ -1414,6 +2420,363 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         </DialogContent>
       </Dialog>
 
+      {/* ── DEPLOY RENTAL MATERIAL TO THIS SITE MODAL ── */}
+      <Dialog open={showDeployRental} onOpenChange={setShowDeployRental}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-amber-600" />
+              Deploy Rental Material to {site.name}
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleDeployRentalToSite} className="space-y-4 pt-1 text-xs">
+            {/* Quick Material Selection or Entry */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Rental Material / Equipment *</Label>
+              {materialSettings.filter(m => m.isRental).length > 0 ? (
+                <div className="space-y-2">
+                  <Select
+                    value={rentalMatId}
+                    onValueChange={val => {
+                      if (val === 'custom') {
+                        setRentalMatId('');
+                        setRentalMatName('');
+                      } else {
+                        handleSelectRentalPreset(val);
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue placeholder="Select from Rental Material Catalog" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {materialSettings.map(m => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.name} {m.isRental ? '★ Rental' : ''} {m.rentalRatePerDay ? `(₹${m.rentalRatePerDay}/day)` : ''}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value="custom">+ Custom / Enter Name Manually</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <Input
+                    placeholder="Material Name (e.g. Scaffolding Pipes, Concrete Mixer, Shuttering Plates)"
+                    value={rentalMatName}
+                    onChange={e => setRentalMatName(e.target.value)}
+                    className="h-9 text-xs"
+                    required
+                  />
+                </div>
+              ) : (
+                <Input
+                  placeholder="Material Name (e.g. Scaffolding Pipes, Concrete Mixer Machine)"
+                  value={rentalMatName}
+                  onChange={e => setRentalMatName(e.target.value)}
+                  className="h-9 text-xs"
+                  required
+                />
+              )}
+            </div>
+
+            {/* Start Date */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Deployment Start Date on Site *</Label>
+              <Input
+                type="date"
+                value={rentalStartDate}
+                onChange={e => setRentalStartDate(e.target.value)}
+                className="h-9 text-xs"
+                required
+              />
+            </div>
+
+            {/* Quantity & Unit */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Quantity Deployed *</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={rentalQuantity}
+                  onChange={e => setRentalQuantity(e.target.value)}
+                  placeholder="e.g. 50"
+                  className="h-9 text-xs font-mono"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Unit</Label>
+                <Select value={rentalUnit} onValueChange={setRentalUnit}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue placeholder="Select Unit" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {['Sets', 'Nos', 'Units', 'Pieces', 'Boxes', 'Tons', 'Kg'].map(u => (
+                      <SelectItem key={u} value={u}>{u}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Daily Rental Rate */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">Rental Rate Per Day (Per Unit / Product)</Label>
+                <span className="text-[10px] text-muted-foreground">Adjustable at return time</span>
+              </div>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-mono text-xs">₹</span>
+                <Input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={rentalRatePerDay}
+                  onChange={e => setRentalRatePerDay(e.target.value)}
+                  placeholder="e.g. 15 per day per set"
+                  className="pl-7 h-9 text-xs font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Driver Requirement Section */}
+            <div className="p-3 rounded-xl bg-muted/40 border border-border/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rentalRequiresDriver}
+                    onChange={e => setRentalRequiresDriver(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500"
+                  />
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-amber-600" />
+                    Driver & Vehicle Required for Transit
+                  </span>
+                </label>
+                <span className="text-[10px] text-muted-foreground">
+                  {rentalRequiresDriver ? 'Driver will be assigned' : 'Direct on-site deployment'}
+                </span>
+              </div>
+
+              {rentalRequiresDriver && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-border/40">
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Assign Driver</Label>
+                    <Select value={rentalDriverId} onValueChange={setRentalDriverId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select Driver" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {driversList.map(d => (
+                          <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Assign Vehicle</Label>
+                    <Select value={rentalVehicleId} onValueChange={setRentalVehicleId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select Vehicle" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {vehicles.map(v => (
+                          <SelectItem key={v.id} value={v.id}>{v.name} ({v.number})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold">Transit Cost (₹)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={rentalTransitCost}
+                      onChange={e => setRentalTransitCost(e.target.value)}
+                      placeholder="e.g. 500"
+                      className="h-8 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Notes */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Notes / Identification / Serial No.</Label>
+              <Textarea
+                value={rentalNotes}
+                onChange={e => setRentalNotes(e.target.value)}
+                placeholder="e.g. 50 sets scaffolding pipes, delivered in good condition"
+                className="text-xs min-h-[60px]"
+              />
+            </div>
+
+            {/* Estimated Daily Cost Banner */}
+            {(Number(rentalQuantity) > 0 && Number(rentalRatePerDay) > 0) && (
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between text-xs">
+                <span className="text-amber-800 dark:text-amber-300 font-semibold">Estimated Daily Cost:</span>
+                <span className="font-mono font-bold text-amber-700 dark:text-amber-400">
+                  ₹{(Number(rentalQuantity) * Number(rentalRatePerDay)).toLocaleString()} / day
+                </span>
+              </div>
+            )}
+
+            <Button
+              type="submit"
+              className="w-full h-10 rounded-xl text-white font-bold text-xs bg-amber-600 hover:bg-amber-700 shadow-sm"
+            >
+              Deploy Rental to Site
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── RETURN & CLOSE RENTAL CALCULATION MODAL FOR THIS SITE ── */}
+      <Dialog
+        open={returnRentalModal.open}
+        onOpenChange={open => !open && setReturnRentalModal({ open: false, rental: null })}
+      >
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              Close Rental & Settle Calculations
+            </DialogTitle>
+          </DialogHeader>
+
+          {returnRentalModal.rental && (() => {
+            const r = returnRentalModal.rental;
+            const startMs = new Date(r.startDate + 'T00:00:00').getTime();
+            const endMs = new Date(returnEndDate + 'T00:00:00').getTime();
+            const totalDays = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+            const rateNum = Number(returnRatePerDay) || 0;
+            const matRent = totalDays * r.quantity * rateNum;
+            const transitCost = r.transitCost || 0;
+            const totalCost = matRent + transitCost;
+
+            return (
+              <form onSubmit={handleConfirmReturnRental} className="space-y-4 pt-1 text-xs">
+                {/* Deployment Overview Card */}
+                <div className="p-3 rounded-xl bg-card border border-border/70 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-foreground">{r.materialName}</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary font-bold">
+                      {r.quantity} {r.unit}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground flex items-center gap-2">
+                    <MapPin className="w-3 h-3 text-primary" /> Site: <span className="font-semibold text-foreground">{r.siteName}</span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground flex items-center gap-2">
+                    <CalendarDays className="w-3 h-3" /> Deployed on: <span className="font-mono font-semibold text-foreground">{r.startDate}</span>
+                  </div>
+                  {r.requiresDriver && (
+                    <div className="text-[11px] text-muted-foreground flex items-center gap-2">
+                      <Truck className="w-3 h-3 text-blue-500" /> Driver: <span className="font-semibold text-foreground">{r.driverName || 'Assigned'}</span>
+                      {r.vehicleNumber && ` (${r.vehicleNumber})`}
+                      {r.transitCost ? ` • Transit: ₹${r.transitCost.toLocaleString()}` : ''}
+                    </div>
+                  )}
+                </div>
+
+                {/* Return Date & Rental Rate Input */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">End / Return Date *</Label>
+                    <Input
+                      type="date"
+                      value={returnEndDate}
+                      onChange={e => setReturnEndDate(e.target.value)}
+                      className="h-9 text-xs"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Rate / Day per {r.unit || 'Product'} (₹)</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-mono text-xs">₹</span>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={returnRatePerDay}
+                        onChange={e => setReturnRatePerDay(e.target.value)}
+                        placeholder="Rate per day"
+                        className="pl-7 h-9 text-xs font-mono"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Return Notes */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Closing Notes / Condition on Return</Label>
+                  <Textarea
+                    value={returnNotes}
+                    onChange={e => setReturnNotes(e.target.value)}
+                    placeholder="e.g. Returned in good condition, no damage"
+                    className="text-xs min-h-[50px]"
+                  />
+                </div>
+
+                {/* Realtime Calculation Breakdown */}
+                <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60 space-y-2">
+                  <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                    Final Cost Calculation Breakdown
+                  </div>
+
+                  <div className="space-y-1 pt-1 text-xs">
+                    <div className="flex justify-between items-center text-muted-foreground">
+                      <span>Deployment Duration:</span>
+                      <span className="font-mono font-semibold text-foreground">
+                        {totalDays} {totalDays === 1 ? 'day' : 'days'} ({r.startDate} to {returnEndDate})
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-muted-foreground">
+                      <span>Material Rental Calculation:</span>
+                      <span className="font-mono font-semibold text-foreground">
+                        {totalDays} days × {r.quantity} {r.unit} × ₹{rateNum} = ₹{matRent.toLocaleString()}
+                      </span>
+                    </div>
+                    {transitCost > 0 && (
+                      <div className="flex justify-between items-center text-muted-foreground">
+                        <span>Transit / Driver Delivery Cost:</span>
+                        <span className="font-mono font-semibold text-foreground">
+                          + ₹{transitCost.toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                    <div className="pt-2 border-t border-border/50 flex justify-between items-center font-bold text-sm">
+                      <span className="text-foreground">Total Rental Cost:</span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-400 text-base">
+                        ₹{totalCost.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <Button
+                  type="submit"
+                  className="w-full h-10 rounded-xl text-white font-bold text-xs bg-emerald-600 hover:bg-emerald-700 shadow-sm"
+                >
+                  Confirm Return & Settle Rental
+                </Button>
+              </form>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
       <AssignMaterialModal
         open={assignModal.open}
         onOpenChange={open => setAssignModal(prev => ({ ...prev, open }))}
@@ -1440,7 +2803,8 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
 // ── Sites Tab Main Component ──────────────────────────────
 export const SitesTab = () => {
-  const { sites, addSite, customers, addCustomer, staffList, materialRequests } = useApp();
+  const { sites, addSite, customers, addCustomer, staffList, materialRequests, materialRentals } = useApp();
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [addr, setAddr] = useState('');
   const [client, setClient] = useState('');
@@ -1452,6 +2816,7 @@ export const SitesTab = () => {
   const [supervisor, setSupervisor] = useState('none');
   const [show, setShow] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('new');
 
   if (selectedSiteId) {
     return <SiteDetailView siteId={selectedSiteId} onBack={() => setSelectedSiteId(null)} />;
@@ -1460,24 +2825,33 @@ export const SitesTab = () => {
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) { toast.error('Site name required'); return; }
-    if (!client.trim()) { toast.error('Client name required'); return; }
 
-    const existingClient = customers.find(c => c.phone === clientPhone.trim());
-    if (!existingClient && clientPhone.trim()) {
-      addCustomer({
-        name: client.trim(),
-        phone: clientPhone.trim(),
-        email: clientEmail.trim(),
-        category: 'direct',
-        address: clientAddress.trim(),
-        notes: ''
-      });
+    let finalClientName = '';
+
+    if (selectedCustomerId === 'new') {
+      if (!client.trim()) { toast.error('Client name required'); return; }
+      finalClientName = client.trim();
+      const existingClient = customers.find(c => c.phone === clientPhone.trim());
+      if (!existingClient && clientPhone.trim()) {
+        addCustomer({
+          name: client.trim(),
+          phone: clientPhone.trim(),
+          email: clientEmail.trim(),
+          category: 'direct',
+          address: clientAddress.trim(),
+          notes: ''
+        });
+      }
+    } else {
+      const selectedCust = customers.find(c => c.id === selectedCustomerId);
+      if (!selectedCust) { toast.error('Please select a valid customer'); return; }
+      finalClientName = selectedCust.name;
     }
 
     addSite({
       name,
       address: addr,
-      clientName: client,
+      clientName: finalClientName,
       status: 'active',
       startDate: start,
       budget: Number(budget) || 0,
@@ -1492,7 +2866,7 @@ export const SitesTab = () => {
   return (
     <div className="space-y-4 animate-slide-up">
       <div className="flex items-center justify-between">
-        <h3 className="section-header">Site Management</h3>
+        <h3 className="section-header">{t('sites.siteManagement')}</h3>
         <Button
           size="sm"
           onClick={() => setShow(v => !v)}
@@ -1525,26 +2899,46 @@ export const SitesTab = () => {
               <Label className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2 block">
                 Client Details
               </Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
-                  <Label className="text-[10px] text-muted-foreground">Client Name *</Label>
-                  <Input
-                    placeholder="e.g. Ramesh Babu"
-                    value={client}
-                    onChange={e => setClient(e.target.value)}
-                    className="h-9 rounded-xl text-xs font-semibold"
-                  />
-                </div>
-                <div>
-                  <Label className="text-[10px] text-muted-foreground">Client Phone</Label>
-                  <Input
-                    placeholder="9876543210"
-                    value={clientPhone}
-                    onChange={e => setClientPhone(e.target.value)}
-                    className="h-9 rounded-xl text-xs font-semibold"
-                  />
-                </div>
+
+              <div className="mb-3">
+                <Label className="text-[10px] text-muted-foreground">Select Customer *</Label>
+                <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                  <SelectTrigger className="h-9 rounded-xl text-xs font-semibold">
+                    <SelectValue placeholder="Select or Create New Customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="new">+ Create New Customer</SelectItem>
+                    {customers.map(c => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} ({c.phone || 'No phone'})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+
+              {selectedCustomerId === 'new' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground">New Client Name *</Label>
+                    <Input
+                      placeholder="e.g. Ramesh Babu"
+                      value={client}
+                      onChange={e => setClient(e.target.value)}
+                      className="h-9 rounded-xl text-xs font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground">New Client Phone</Label>
+                    <Input
+                      placeholder="9876543210"
+                      value={clientPhone}
+                      onChange={e => setClientPhone(e.target.value)}
+                      className="h-9 rounded-xl text-xs font-semibold"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2">
@@ -1612,15 +3006,26 @@ export const SitesTab = () => {
 
             <div className="flex items-center justify-between text-xs pt-3 border-t border-border/50 font-medium">
               <span className="text-muted-foreground font-semibold">Budget: ₹{s.budget.toLocaleString()}</span>
-              {(() => {
-                const sReqs = (materialRequests || []).filter(r => r.siteId === s.id && r.status !== 'cancelled');
-                if (sReqs.length === 0) return null;
-                return (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                    <Package className="w-3 h-3" /> {sReqs.length} {sReqs.length === 1 ? 'material order' : 'material orders'}
-                  </span>
-                );
-              })()}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {(() => {
+                  const sReqs = (materialRequests || []).filter(r => r.siteId === s.id && r.status !== 'cancelled');
+                  if (sReqs.length === 0) return null;
+                  return (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                      <Package className="w-3 h-3" /> {sReqs.length} {sReqs.length === 1 ? 'order' : 'orders'}
+                    </span>
+                  );
+                })()}
+                {(() => {
+                  const activeRentals = (materialRentals || []).filter(r => r.siteId === s.id && r.status === 'active');
+                  if (activeRentals.length === 0) return null;
+                  return (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
+                      <RefreshCw className="w-3 h-3" /> {activeRentals.length} {activeRentals.length === 1 ? 'rental' : 'rentals'}
+                    </span>
+                  );
+                })()}
+              </div>
               <span className="text-primary font-bold group-hover:translate-x-0.5 transition-transform">View Details →</span>
             </div>
           </Card>

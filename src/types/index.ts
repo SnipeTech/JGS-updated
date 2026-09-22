@@ -5,6 +5,7 @@ export interface Staff {
   role: string;
   password?: string;
   supervisorId?: string;
+  adminPermissions?: string[]; // Array of TabId strings
   salaryType?: 'daily' | 'hourly'; // 'daily' | 'hourly'
   perDaySalary?: number;
   perHourSalary?: number;          // hourly salary (₹/hr)
@@ -17,6 +18,21 @@ export interface Staff {
   perDayIncentive?: number;
 }
 
+export interface SitePayment {
+  id: string;
+  amount: number;
+  date: string;
+  note: string;
+}
+
+export interface SitePaymentStage {
+  stageName: string;
+  expectedAmount: number;
+  paidAmount: number;
+  dueDate?: string;
+  payments: SitePayment[];
+}
+
 export interface Site {
   id: string;
   name: string;
@@ -27,6 +43,7 @@ export interface Site {
   budget: number;
   supervisorId?: string;
   assignedStaffIds?: string[];
+  paymentStages?: SitePaymentStage[];
 }
 
 export interface Customer {
@@ -78,25 +95,14 @@ export interface PaymentHistory {
   note: string;
 }
 
-export interface Invoice {
+export interface ManualExpense {
   id: string;
-  invoiceNumber: string;
-  quotationId?: string;
-  customerId: string;
-  customerName: string;
-  customerPhone?: string;
   siteId: string;
-  siteName: string;
-  items: QuotationItem[];
-  totalAmount: number;
-  paidAmount: number;
-  status: 'pending' | 'partial' | 'paid';
-  paymentHistory?: PaymentHistory[];
-  paymentType: 'full' | 'partial';
-  partialDueDate?: string;
-  createdAt: string;
-  dueDate: string;
-  notes: string;
+  siteName?: string;
+  date: string;
+  amount: number;
+  category: string;
+  description: string;
 }
 
 export interface Vendor {
@@ -151,6 +157,7 @@ export interface DailyLog {
   incomeFromClient: number;
   notes: string;
   workerIds?: string[];
+  workerCounts?: LabourCount;
 }
 
 export interface LabourCount {
@@ -180,6 +187,9 @@ export interface Attendance {
   siteAssignments?: SiteAssignment[];
   unnamedOtHours?: number;
   unnamedOtStaffCount?: number;
+  isSubmitted?: boolean;
+  editedByAdmin?: boolean;
+  editedByAdminName?: string;
 }
 
 export interface MaterialSetting {
@@ -188,6 +198,32 @@ export interface MaterialSetting {
   unit: string;
   perUnitWeight?: string;
   defaultRate?: number;
+  isRental?: boolean;
+  rentalRatePerDay?: number;
+}
+
+export interface MaterialRental {
+  id: string;
+  materialId: string;
+  materialName: string;
+  siteId: string;
+  siteName: string;
+  startDate: string;
+  endDate?: string;
+  quantity: number;
+  unit: string;
+  requiresDriver: boolean;
+  driverId?: string;
+  driverName?: string;
+  vehicleId?: string;
+  vehicleNumber?: string;
+  transitCost?: number;
+  rentalRatePerDay: number;
+  totalDays?: number;
+  totalRentalCost?: number;
+  status: 'active' | 'returned';
+  notes?: string;
+  createdAt: string;
 }
 
 export interface Supplier {
@@ -297,6 +333,13 @@ export interface MaterialRequest {
   supplierPaymentDate?: string;
   supplierPaymentNotes?: string;
   supplierPayments?: SupplierPaymentRecord[];
+
+  // GST details:
+  gstType?: 'none' | 'igst' | 'cgst_sgst';
+  igstRate?: number;
+  cgstRate?: number;
+  sgstRate?: number;
+  gstAmount?: number;
   
   completedAt?: string;
   completionNotes?: string;
@@ -309,7 +352,7 @@ export interface AppState {
   customers: Customer[];
   products: Product[];
   quotations: Quotation[];
-  invoices: Invoice[];
+  manualExpenses: ManualExpense[];
   vendors: Vendor[];
   workEntries: WorkEntry[];
   attendances: Attendance[];
@@ -317,5 +360,8 @@ export interface AppState {
   suppliers: Supplier[];
   vehicles: Vehicle[];
   materialRequests: MaterialRequest[];
-  currentUser: { id: string; role: 'admin' | 'staff' } | null;
+  labourTypes: string[];
+  paymentStageMaster: string[];
+  materialRentals: MaterialRental[];
+  currentUser: { id: string; role: 'admin' | 'staff'; adminPermissions?: string[] } | null;
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,8 +18,46 @@ import { MySalaryTab } from './Staff/MySalaryTab';
 const StaffDashboard = () => {
   const { logout, currentUser, staffList, sites, dailyLogs } = useApp();
   const staff = staffList.find(s => s.id === currentUser?.id);
-
+  const [activeLanguage, setActiveLanguage] = useState<'en' | 'ta' | 'hi'>('en');
   const [activeSection, setActiveSection] = useState<'log' | 'material_request' | 'history' | 'week' | 'team_attendance' | 'salary'>('log');
+  const [activeSiteForMaterial, setActiveSiteForMaterial] = useState<string>('');
+
+  useEffect(() => {
+    // Check if there's an existing translation cookie to set initial active language state
+    const cookieLang = document.cookie.split('; ').find(row => row.startsWith('googtrans='))?.split('=')[1];
+    if (cookieLang) {
+      const code = cookieLang.split('/').pop();
+      if (code && ['en', 'ta', 'hi'].includes(code)) setActiveLanguage(code as any);
+    }
+
+    // Add Google Translate Script
+    if (!document.getElementById('google-translate-script')) {
+      const script = document.createElement('script');
+      script.id = 'google-translate-script';
+      script.src = '//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';
+      document.body.appendChild(script);
+
+      (window as any).googleTranslateElementInit = () => {
+        new (window as any).google.translate.TranslateElement(
+          { pageLanguage: 'en', includedLanguages: 'en,ta,hi', layout: (window as any).google.translate.TranslateElement.InlineLayout.SIMPLE },
+          'google_translate_element'
+        );
+      };
+    }
+  }, []);
+
+  const triggerTranslation = (langCode: 'en' | 'ta' | 'hi') => {
+    setActiveLanguage(langCode);
+    const selectElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+    if (selectElement) {
+      selectElement.value = langCode;
+      selectElement.dispatchEvent(new Event('change'));
+    } else {
+      // Fallback: set cookie and reload
+      document.cookie = `googtrans=/en/${langCode}; path=/;`;
+      window.location.reload();
+    }
+  };
 
   const isAdmin = currentUser?.role === 'admin' || staff?.role === 'admin';
   const isSupervisor = staff?.role === 'supervisor' || isAdmin;
@@ -90,8 +128,17 @@ const StaffDashboard = () => {
           })}
         </nav>
 
-        {/* Sidebar Footer / User Profile */}
+        {/* Sidebar Footer / User Profile & Language Switcher */}
         <div className="mt-auto pt-4 border-t border-zinc-800/80 space-y-3">
+          {/* Custom Language Switcher (Triggers hidden Google Translate) */}
+          <div className="flex bg-zinc-900 rounded-xl p-1 border border-zinc-800">
+            <button onClick={() => triggerTranslation('en')} className={`flex-1 text-[10px] font-bold py-1.5 rounded-lg transition-colors ${activeLanguage === 'en' ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-400 hover:text-zinc-300'}`}>EN</button>
+            <button onClick={() => triggerTranslation('ta')} className={`flex-1 text-[10px] font-bold py-1.5 rounded-lg transition-colors ${activeLanguage === 'ta' ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-400 hover:text-zinc-300'}`}>TA</button>
+            <button onClick={() => triggerTranslation('hi')} className={`flex-1 text-[10px] font-bold py-1.5 rounded-lg transition-colors ${activeLanguage === 'hi' ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-400 hover:text-zinc-300'}`}>HI</button>
+          </div>
+          {/* Hidden Google Translate Native Element */}
+          <div id="google_translate_element" className="hidden"></div>
+
           <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-zinc-900/80 border border-zinc-800/80">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center font-heading font-bold text-white text-xs shadow-md uppercase">
               {staff?.name?.slice(0, 2) || 'ST'}
@@ -230,11 +277,14 @@ const StaffDashboard = () => {
               <WorkEntryTab
                 staff={staff}
                 mySites={mySites}
-                onNavigateToMaterialRequest={() => setActiveSection('material_request')}
+                onNavigateToMaterialRequest={(siteId) => {
+                  setActiveSiteForMaterial(siteId || '');
+                  setActiveSection('material_request');
+                }}
                 onNavigateToAttendance={() => setActiveSection('team_attendance')}
               />
             )}
-            {activeSection === 'material_request' && <MaterialRequestTab staff={staff} mySites={mySites} />}
+            {activeSection === 'material_request' && <MaterialRequestTab staff={staff} mySites={mySites} initialSiteId={activeSiteForMaterial} />}
             {activeSection === 'history' && <WorkHistoryTab staff={staff} />}
             {activeSection === 'week' && <ThisWeekTab staff={staff} />}
             {activeSection === 'team_attendance' && <StaffAttendanceTab staff={staff} />}

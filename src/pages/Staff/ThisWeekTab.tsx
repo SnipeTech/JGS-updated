@@ -82,18 +82,6 @@ export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
               </p>
 
               {logsOnDay.map(log => {
-                const supervisorAtt = attendances.find(
-                  a => a.staffId === (staff?.id || currentUser?.id) && a.date === dateStr
-                );
-                const siteAssignment = supervisorAtt?.siteAssignments?.find(
-                  sa => sa.siteId === log.siteId
-                );
-                const hasUnnamed =
-                  siteAssignment &&
-                  (siteAssignment.counts.painter > 0 ||
-                    siteAssignment.counts.plumber > 0 ||
-                    siteAssignment.counts.labour > 0);
-
                 return (
                   <Card key={log.id} className="list-card p-4">
                     <div className="flex justify-between items-start mb-2">
@@ -123,25 +111,16 @@ export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
                               </span>
                             </span>
                           </div>
-                          {log.workerIds?.map(id => {
-                            const w = staffList.find(s => s.id === id);
-                            return w ? (
-                              <div key={id} className="flex items-center gap-1.5 text-xs text-foreground/80">
-                                <Users className="w-3.5 h-3.5 text-muted-foreground" />
-                                <span>{w.name}</span>
-                              </div>
-                            ) : null;
-                          })}
-                          {hasUnnamed && (
+                          {log.workerCounts && (log.workerCounts.painter > 0 || log.workerCounts.plumber > 0 || log.workerCounts.labour > 0) && (
                             <div className="flex flex-col gap-0.5 mt-1 text-xs text-muted-foreground bg-muted/40 p-1.5 rounded-lg">
-                              {siteAssignment.counts.painter > 0 && (
-                                <span>• {siteAssignment.counts.painter} Painters</span>
+                              {log.workerCounts.painter > 0 && (
+                                <span>• {log.workerCounts.painter} Painters</span>
                               )}
-                              {siteAssignment.counts.plumber > 0 && (
-                                <span>• {siteAssignment.counts.plumber} Plumbers</span>
+                              {log.workerCounts.plumber > 0 && (
+                                <span>• {log.workerCounts.plumber} Plumbers</span>
                               )}
-                              {siteAssignment.counts.labour > 0 && (
-                                <span>• {siteAssignment.counts.labour} Labourers</span>
+                              {log.workerCounts.labour > 0 && (
+                                <span>• {log.workerCounts.labour} Labourers</span>
                               )}
                             </div>
                           )}

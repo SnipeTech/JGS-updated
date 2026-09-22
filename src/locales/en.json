@@ -1,0 +1,43 @@
+{
+  "sidebar": {
+    "dashboard": "Dashboard",
+    "sites": "Sites",
+    "materials": "Materials & Suppliers",
+    "settings": "Settings & Master Data",
+    "payroll": "Payroll & Salaries",
+    "staff": "Staff Management",
+    "attendance": "Attendance",
+    "customers": "Clients & Customers",
+    "reports": "Reports & Ledger",
+    "logout": "Log Out"
+  },
+  "dashboard": {
+    "activeSites": "Active Sites",
+    "totalStaff": "Total Staff",
+    "clientAccounts": "Client Accounts",
+    "pendingInvoices": "Pending Invoices",
+    "actionRequired": "Action Required"
+  },
+  "sites": {
+    "siteManagement": "Site Management",
+    "activeSites": "Active & Ongoing Sites"
+  },
+  "staff": {
+    "staffAndSupervisors": "Staff & Supervisors"
+  },
+  "attendance": {
+    "dailyAttendance": "Daily Attendance & Overtime"
+  },
+  "staffSidebar": {
+    "workEntry": "Work Entry",
+    "materialRequest": "Material Request",
+    "workHistory": "Work History",
+    "thisWeek": "This Week Overview",
+    "teamAttendance": "Team Attendance",
+    "mySalary": "My Salary & Earnings"
+  },
+  "common": {
+    "selectLanguage": "Language",
+    "welcome": "Welcome back"
+  }
+}

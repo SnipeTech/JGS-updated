@@ -18,12 +18,13 @@ import { calculateDuration, getSiteAvailableStock } from '@/lib/utils';
 interface MaterialRequestTabProps {
   staff: Staff | undefined;
   mySites: Site[];
+  initialSiteId?: string;
 }
 
-export const MaterialRequestTab = ({ staff, mySites }: MaterialRequestTabProps) => {
+export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRequestTabProps) => {
   const { sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest } = useApp();
 
-  const [reqSiteId, setReqSiteId] = useState('');
+  const [reqSiteId, setReqSiteId] = useState(initialSiteId || '');
   const [reqSourceType, setReqSourceType] = useState<'supplier' | 'site'>('supplier');
   const [reqSourceSiteId, setReqSourceSiteId] = useState('');
   const [reqItems, setReqItems] = useState<MaterialRequestItem[]>([

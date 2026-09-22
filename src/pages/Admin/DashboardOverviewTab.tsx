@@ -3,15 +3,87 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
 import {
   Building2, Users, UserCircle, FileText, Package, MapPin,
-  TrendingUp, TrendingDown, IndianRupee, Clock
+  TrendingUp, TrendingDown, IndianRupee, Clock, AlertCircle,
+  CalendarDays, CheckCircle2, ChevronRight, ArrowRight
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export const DashboardOverviewTab = () => {
   const { sites, dailyLogs, staffList, invoices, customers, materialRequests } = useApp();
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const { t } = useTranslation();
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+  // Overdue Site Payment Milestones
+  const overdueMilestones = useMemo(() => {
+    const list: {
+      siteId: string;
+      siteName: string;
+      clientName: string;
+      stageName: string;
+      dueDate: string;
+      expectedAmount: number;
+      paidAmount: number;
+      balance: number;
+      daysOverdue: number;
+    }[] = [];
+
+    sites.forEach(site => {
+      (site.paymentStages || []).forEach(stage => {
+        const expected = stage.expectedAmount || 0;
+        const paid = (stage.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+        const balance = Math.max(0, expected - paid);
+        if (stage.dueDate && stage.dueDate < todayStr && balance > 0) {
+          const dueDateTime = new Date(stage.dueDate + 'T00:00:00').getTime();
+          const todayDateTime = new Date(todayStr + 'T00:00:00').getTime();
+          const daysOverdue = Math.max(1, Math.floor((todayDateTime - dueDateTime) / 86400000));
+          list.push({
+            siteId: site.id,
+            siteName: site.name,
+            clientName: site.clientName || 'Client',
+            stageName: stage.stageName,
+            dueDate: stage.dueDate,
+            expectedAmount: expected,
+            paidAmount: paid,
+            balance,
+            daysOverdue
+          });
+        }
+      });
+    });
+
+    return list.sort((a, b) => b.daysOverdue - a.daysOverdue);
+  }, [sites, todayStr]);
+
+  // Overdue Invoices
+  const overdueInvoices = useMemo(() => {
+    return (invoices || [])
+      .filter((i: any) => i && i.status !== 'paid' && i.dueDate && i.dueDate < todayStr)
+      .map((i: any) => {
+        const dueDateTime = new Date(i.dueDate + 'T00:00:00').getTime();
+        const todayDateTime = new Date(todayStr + 'T00:00:00').getTime();
+        const daysOverdue = Math.max(1, Math.floor((todayDateTime - dueDateTime) / 86400000));
+        const total = Number(i.total ?? i.totalAmount ?? i.grandTotal ?? i.balance ?? i.amount ?? 0) || 0;
+        return {
+          ...i,
+          total,
+          daysOverdue
+        };
+      })
+      .sort((a: any, b: any) => (b.daysOverdue || 0) - (a.daysOverdue || 0));
+  }, [invoices, todayStr]);
+
+  const totalOverdueMilestones = useMemo(() => overdueMilestones.reduce((s, m) => s + (m.balance || 0), 0), [overdueMilestones]);
+  const totalOverdueInvoices = useMemo(() => overdueInvoices.reduce((s, i) => s + (Number(i.total) || 0), 0), [overdueInvoices]);
+  const totalOverdueAmount = (totalOverdueMilestones || 0) + (totalOverdueInvoices || 0);
+  const totalOverdueCount = overdueMilestones.length + overdueInvoices.length;
+
+  const [showOverdueModal, setShowOverdueModal] = useState(false);
 
   const todayLogs = useMemo(
     () => dailyLogs.filter(l => l.date === selectedDate),
@@ -49,7 +121,6 @@ export const DashboardOverviewTab = () => {
   );
   const profit = totalIncome - totalExpense;
   const activeSites = sites.filter(s => s.status === 'active').length;
-  const pendingInvoices = invoices.filter(i => i.status !== 'paid').length;
   const pendingRequests = (materialRequests || []).filter(r => r.status === 'pending').length;
 
   return (
@@ -69,21 +140,31 @@ export const DashboardOverviewTab = () => {
               </p>
             </div>
           </div>
-          <span className="badge-gold text-[10px] px-2.5 py-1 font-bold shrink-0">Action Required</span>
+          <span className="badge-gold text-[10px] px-2.5 py-1 font-bold shrink-0">{t('dashboard.actionRequired')}</span>
         </div>
       )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Active Sites', value: activeSites, icon: <Building2 className="w-5 h-5" />, gradient: 'from-emerald-500/20 to-emerald-500/5', iconColor: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/20' },
-          { label: 'Total Staff', value: staffList.length, icon: <Users className="w-5 h-5" />, gradient: 'from-amber-500/20 to-amber-500/5', iconColor: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20' },
-          { label: 'Client Accounts', value: customers.length, icon: <UserCircle className="w-5 h-5" />, gradient: 'from-blue-500/20 to-blue-500/5', iconColor: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/20' },
-          { label: 'Pending Invoices', value: pendingInvoices, icon: <FileText className="w-5 h-5" />, gradient: 'from-rose-500/20 to-rose-500/5', iconColor: 'text-rose-600 dark:text-rose-400', border: 'border-rose-500/20' },
-        ].map(({ label, value, icon, gradient, iconColor, border }) => (
+          { label: t('dashboard.activeSites'), value: activeSites, subtext: null, icon: <Building2 className="w-5 h-5" />, gradient: 'from-emerald-500/20 to-emerald-500/5', iconColor: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/20', onClick: undefined },
+          { label: t('dashboard.totalStaff'), value: staffList.length, subtext: null, icon: <Users className="w-5 h-5" />, gradient: 'from-amber-500/20 to-amber-500/5', iconColor: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/20', onClick: undefined },
+          { label: t('dashboard.clientAccounts'), value: customers.length, subtext: null, icon: <UserCircle className="w-5 h-5" />, gradient: 'from-blue-500/20 to-blue-500/5', iconColor: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/20', onClick: undefined },
+          {
+            label: 'Overdue Amount',
+            value: `₹${totalOverdueAmount.toLocaleString()}`,
+            subtext: totalOverdueCount > 0 ? `${totalOverdueCount} Overdue Items • Click for details` : 'No overdue items',
+            icon: <AlertCircle className="w-5 h-5" />,
+            gradient: 'from-rose-500/20 to-rose-500/5',
+            iconColor: 'text-rose-600 dark:text-rose-400',
+            border: 'border-rose-500/30 hover:border-rose-500/60 cursor-pointer',
+            onClick: () => setShowOverdueModal(true),
+          },
+        ].map(({ label, value, subtext, icon, gradient, iconColor, border, onClick }) => (
           <div
             key={label}
-            className={`bg-card rounded-3xl p-5 border ${border} shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300 relative overflow-hidden group`}
+            onClick={onClick}
+            className={`bg-card rounded-3xl p-5 border ${border} shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300 relative overflow-hidden group ${onClick ? 'cursor-pointer' : ''}`}
           >
             <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${gradient} rounded-bl-full pointer-events-none transition-transform group-hover:scale-110`} />
             <div className="flex items-center justify-between mb-3 relative z-10">
@@ -93,6 +174,11 @@ export const DashboardOverviewTab = () => {
               </div>
             </div>
             <p className="text-3xl font-heading font-extrabold text-foreground tracking-tight relative z-10">{value}</p>
+            {subtext && (
+              <p className="text-[11px] font-medium text-rose-600 dark:text-rose-400 mt-1 relative z-10 flex items-center gap-1">
+                {subtext}
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -136,9 +222,9 @@ export const DashboardOverviewTab = () => {
               }
 
               return (
-                <Card key={site.id} className="bg-card rounded-3xl p-5 border border-border/60 shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-3">
+                <Card key={site.id} className="bg-card rounded-3xl p-5 border border-border/60 shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300 flex flex-col">
+                  <div className="flex items-start justify-between gap-2 w-full">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
                       <div className="relative shrink-0">
                         <div
                           className="w-11 h-11 rounded-2xl flex items-center justify-center shadow-xs"
@@ -159,7 +245,7 @@ export const DashboardOverviewTab = () => {
                           </span>
                         )}
                       </div>
-                      <div className="min-w-0">
+                      <div className="flex-1 min-w-0">
                         <p className="font-heading font-bold text-base text-foreground truncate">{site.name}</p>
                         <p className="text-xs text-muted-foreground truncate">{site.clientName}</p>
                         {site.address && (
@@ -324,6 +410,160 @@ export const DashboardOverviewTab = () => {
           </div>
         )}
       </div>
+
+      {/* Overdue Amount Explanation Dialog */}
+      <Dialog open={showOverdueModal} onOpenChange={setShowOverdueModal}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto rounded-3xl p-6">
+          <DialogHeader className="pb-3 border-b border-border/50">
+            <DialogTitle className="text-base font-heading font-bold flex items-center gap-2 text-destructive">
+              <AlertCircle className="w-5 h-5" />
+              Overdue Amount Details & Explanation
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Detailed breakdown of site milestone payment stages and customer invoices that have passed their target due dates without complete payment.
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            {/* Summary Banner */}
+            <div className="p-4 rounded-2xl bg-destructive/10 border border-destructive/20 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-destructive block tracking-wider">
+                  Total Outstanding Overdue
+                </span>
+                <span className="font-heading font-extrabold text-2xl text-destructive">
+                  ₹{totalOverdueAmount.toLocaleString()}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-right text-xs">
+                  <span className="text-muted-foreground block text-[10px]">Site Milestones:</span>
+                  <span className="font-bold text-foreground">₹{totalOverdueMilestones.toLocaleString()}</span>
+                  <span className="text-[10px] text-muted-foreground ml-1">({overdueMilestones.length})</span>
+                </div>
+                <div className="h-6 w-px bg-border/60 mx-1" />
+                <div className="text-right text-xs">
+                  <span className="text-muted-foreground block text-[10px]">Invoices:</span>
+                  <span className="font-bold text-foreground">₹{totalOverdueInvoices.toLocaleString()}</span>
+                  <span className="text-[10px] text-muted-foreground ml-1">({overdueInvoices.length})</span>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 1: SITE STAGE PAYMENT MILESTONES */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-heading font-bold text-foreground flex items-center gap-1.5 uppercase tracking-wider">
+                  <Building2 className="w-3.5 h-3.5 text-primary" />
+                  Site Payment Milestones Overdue ({overdueMilestones.length})
+                </h4>
+                <span className="text-[10px] text-muted-foreground">From Site Level of Completion Stages</span>
+              </div>
+
+              {overdueMilestones.length === 0 ? (
+                <div className="p-4 rounded-xl bg-muted/20 border border-border/40 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  All site payment milestone stages are paid or on schedule!
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {overdueMilestones.map((m, idx) => (
+                    <div key={idx} className="p-3.5 rounded-2xl bg-card border border-destructive/25 hover:border-destructive/40 transition-colors shadow-2xs space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="font-heading font-bold text-sm text-foreground block">
+                            {m.siteName}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            Client: <strong className="text-foreground">{m.clientName}</strong> • Stage: <span className="font-semibold text-primary">{m.stageName}</span>
+                          </span>
+                        </div>
+                        <span className="bg-destructive/10 text-destructive border border-destructive/20 px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0">
+                          Overdue by {m.daysOverdue} {m.daysOverdue === 1 ? 'day' : 'days'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 p-2 rounded-xl bg-muted/30 text-xs">
+                        <div>
+                          <span className="text-[10px] text-muted-foreground block">Target Date:</span>
+                          <span className="font-semibold">
+                            {(() => {
+                              try {
+                                return format(new Date(m.dueDate + 'T00:00:00'), 'dd MMM yyyy');
+                              } catch {
+                                return m.dueDate || 'N/A';
+                              }
+                            })()}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-muted-foreground block">Stage Expected:</span>
+                          <span className="font-semibold">₹{(m.expectedAmount || 0).toLocaleString()}</span>
+                          <span className="text-[10px] text-muted-foreground block">Paid: ₹{(m.paidAmount || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-destructive font-bold block">Overdue Balance:</span>
+                          <span className="font-extrabold text-sm text-destructive">₹{(m.balance || 0).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* SECTION 2: CUSTOMER INVOICES */}
+            <div className="space-y-2 pt-2 border-t border-border/40">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-heading font-bold text-foreground flex items-center gap-1.5 uppercase tracking-wider">
+                  <FileText className="w-3.5 h-3.5 text-primary" />
+                  Overdue Customer Invoices ({overdueInvoices.length})
+                </h4>
+                <span className="text-[10px] text-muted-foreground">Unpaid Invoices past Due Date</span>
+              </div>
+
+              {overdueInvoices.length === 0 ? (
+                <div className="p-4 rounded-xl bg-muted/20 border border-border/40 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  No customer invoices are overdue!
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {overdueInvoices.map((inv: any) => {
+                    const totalVal = Number(inv.total ?? inv.totalAmount ?? inv.grandTotal ?? inv.balance ?? inv.amount ?? 0) || 0;
+                    let dueFormatted = inv.dueDate;
+                    try {
+                      dueFormatted = format(new Date(inv.dueDate + 'T00:00:00'), 'dd MMM yyyy');
+                    } catch {
+                      dueFormatted = inv.dueDate || 'N/A';
+                    }
+                    return (
+                      <div key={inv.id || Math.random()} className="p-3 rounded-2xl bg-card border border-destructive/25 flex items-center justify-between gap-3 text-xs">
+                        <div>
+                          <span className="font-bold text-foreground block">
+                            {inv.invoiceNumber || 'Invoice'} — {inv.customerName || 'Customer'}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            Due Date: {dueFormatted}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-bold text-sm text-destructive block">
+                            ₹{totalVal.toLocaleString()}
+                          </span>
+                          <span className="text-[10px] font-bold text-destructive bg-destructive/10 px-2 py-0.5 rounded-full">
+                            Overdue by {inv.daysOverdue || 1} days
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
