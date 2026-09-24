@@ -3,9 +3,14 @@ import { Staff, Site, DailyLog, AppState, Customer, Product, Quotation, Invoice,
 import { calculateDuration } from '@/lib/utils';
 import { format } from 'date-fns';
 
+import { api } from '@/services/api';
+
 interface AppContextType extends AppState {
   login: (id: string, password: string) => boolean;
   logout: () => void;
+  isBackendConnected: boolean;
+  clearAllData: () => Promise<void>;
+  refreshFromBackend: () => Promise<void>;
   // Staff
   addStaff: (staff: Omit<Staff, 'id'>) => void;
   deleteStaff: (id: string) => void;
@@ -70,145 +75,26 @@ interface AppContextType extends AppState {
   switchPortal: (portal: 'admin' | 'staff') => void;
 }
 
-const ADMIN = { id: 'admin', name: 'Admin', phone: '0000000000', role: 'admin', password: 'admin123' };
-
-const demoStaffId = 'staff_1772771203700';
-const demoSiteId = 'site_1772771203701';
-const demoSiteId2 = 'site_1772771203703';
-const demoSiteId3 = 'site_1772771203704';
-const demoCustId = 'cust_1772771203702';
+const ADMIN = { id: 'admin', name: 'JGS', phone: '0000000000', role: 'admin', password: 'jgsconstruction*$' };
 
 const defaultState: AppState = {
-  staffList: [
-    { id: demoStaffId, name: 'Siddharth Staff', phone: '9876543210', role: 'supervisor', password: '123', perDaySalary: 800, inTime: '09:00', outTime: '18:00', incentivePerHour: 100, underLabourSalary: 700, underLabourOT: 100 }
-  ],
-  sites: [
-    { id: demoSiteId, name: 'Villa Renovation', address: '123 Beach Rd, Kochi', clientName: 'Mr. John Abraham', status: 'active', startDate: '2026-03-01', budget: 500000 },
-    { id: demoSiteId2, name: 'Penthouse Heights (MG Road)', address: '45 MG Road, Kochi', clientName: 'Dr. Ramesh Kumar', status: 'active', startDate: '2026-02-15', budget: 850000 },
-    { id: demoSiteId3, name: 'Greenwood Luxury Villa', address: 'Plot 12 Kadavanthra, Kochi', clientName: 'Mrs. Priya Nambiar', status: 'active', startDate: '2026-03-10', budget: 620000 }
-  ],
-  dailyLogs: [
-    {
-      id: 'log_1',
-      staffId: demoStaffId,
-      staffName: 'Siddharth Staff',
-      siteId: demoSiteId,
-      siteName: 'Villa Renovation',
-      date: '2026-03-04',
-      materials: [{ name: 'Cement Bag', quantity: 10, cost: 450 }],
-      expenses: [{ itemName: 'Food', amount: 200 }, { itemName: 'Bus', amount: 50 }],
-      incomeFromClient: 5000,
-      notes: 'Initial site preparation and clearing. Cement delivered.'
-    },
-    {
-      id: 'log_2',
-      staffId: demoStaffId,
-      staffName: 'Siddharth Staff',
-      siteId: demoSiteId,
-      siteName: 'Villa Renovation',
-      date: '2026-03-05',
-      materials: [{ name: 'Paint Cans', quantity: 5, cost: 2100 }],
-      expenses: [{ itemName: 'Food', amount: 250 }],
-      incomeFromClient: 0,
-      notes: 'Wall primering started for main hall area.'
-    },
-    {
-      id: 'log_3',
-      staffId: demoStaffId,
-      staffName: 'Siddharth Staff',
-      siteId: demoSiteId,
-      siteName: 'Villa Renovation',
-      date: '2026-03-06',
-      materials: [],
-      expenses: [{ itemName: 'Auto', amount: 80 }],
-      incomeFromClient: 2000,
-      notes: 'Wiring inspection completed by electrician. Plumbing check-up scheduled.'
-    },
-    {
-      id: 'log_penthouse_1',
-      staffId: demoStaffId,
-      staffName: 'Siddharth Staff',
-      siteId: demoSiteId2,
-      siteName: 'Penthouse Heights (MG Road)',
-      date: '2026-03-02',
-      materials: [
-        { name: 'Cement Bag (50kg)', quantity: 30, cost: 420 },
-        { name: 'M-Sand', quantity: 5, cost: 1800 },
-        { name: 'Interior Paint (White)', quantity: 18, cost: 380 },
-        { name: 'Wall Putty', quantity: 10, cost: 450 }
-      ],
-      expenses: [{ itemName: 'Auto', amount: 120 }],
-      incomeFromClient: 25000,
-      notes: 'Foundation and plastering materials stored on site surplus.'
-    },
-    {
-      id: 'log_greenwood_1',
-      staffId: demoStaffId,
-      staffName: 'Siddharth Staff',
-      siteId: demoSiteId3,
-      siteName: 'Greenwood Luxury Villa',
-      date: '2026-03-03',
-      materials: [
-        { name: 'Red Bricks', quantity: 600, cost: 12 },
-        { name: 'Jalli (Aggregate)', quantity: 3, cost: 2200 },
-        { name: 'Cement Bag (50kg)', quantity: 15, cost: 430 }
-      ],
-      expenses: [{ itemName: 'Food', amount: 150 }],
-      incomeFromClient: 15000,
-      notes: 'Compound wall construction stock in hand.'
-    }
-  ],
-  customers: [
-    { id: demoCustId, name: 'John Abraham', phone: '9876543210', email: 'john@example.com', address: 'Marine Drive, Kochi', notes: 'Premium client, focus on quality.', createdAt: new Date().toISOString() }
-  ],
+  staffList: [],
+  sites: [],
+  dailyLogs: [],
+  customers: [],
   products: [],
   quotations: [],
   manualExpenses: [],
   vendors: [],
   workEntries: [],
   attendances: [],
-  materialSettings: [
-    { id: 'ms_1', name: 'Cement', unit: 'Bags', perUnitWeight: '50kg', defaultRate: 380, isRental: false },
-    { id: 'ms_2', name: 'Jalli', unit: 'Tons', perUnitWeight: '1 Ton', defaultRate: 1400, isRental: false },
-    { id: 'ms_3', name: 'Sand', unit: 'Tons', perUnitWeight: '1 Ton', defaultRate: 2200, isRental: false },
-    { id: 'ms_rental_1', name: 'Steel Scaffolding Set', unit: 'Sets', defaultRate: 40, isRental: true, rentalRatePerDay: 40 },
-    { id: 'ms_rental_2', name: 'Concrete Mixer Machine', unit: 'Nos', defaultRate: 500, isRental: true, rentalRatePerDay: 500 },
-    { id: 'ms_rental_3', name: 'Shuttering Plates (Iron)', unit: 'Nos', defaultRate: 15, isRental: true, rentalRatePerDay: 15 },
-  ],
-  suppliers: [
-    { id: 'sup_1', name: 'Sri Murugan Hardwares', phone: '9842155667', address: 'Main Road, Kochi', materialsSupplied: 'Cement, Jalli, Sand', suppliedMaterials: ['Cement', 'Jalli', 'Sand'], createdAt: new Date().toISOString() },
-    { id: 'sup_2', name: 'Krishna Paints & Electricals', phone: '9443211223', address: 'Town Centre, Kochi', materialsSupplied: 'Paints, Putty', suppliedMaterials: ['Paints'], createdAt: new Date().toISOString() }
-  ],
-  vehicles: [
-    { id: 'veh_1', name: 'Mahindra Bolero Pickup', number: 'TN 38 P 1024', type: 'Pickup', createdAt: new Date().toISOString() },
-    { id: 'veh_2', name: 'JCB 3DX Earth Mover', number: 'TN 38 J 4521', type: 'JCB', createdAt: new Date().toISOString() },
-    { id: 'veh_3', name: 'Tata Ace Gold', number: 'TN 38 M 8890', type: 'Mini Truck (Tata Ace)', createdAt: new Date().toISOString() }
-  ],
+  materialSettings: [],
+  suppliers: [],
+  vehicles: [],
   materialRequests: [],
   labourTypes: ['painter', 'plumber', 'electrician', 'labour'],
   paymentStageMaster: ['Level 1: Foundation', 'Level 2: Ground Floor Slab', 'Level 3: Plastering', 'Level 4: Finishing & Handover'],
-  materialRentals: [
-    {
-      id: 'rent_1',
-      materialId: 'ms_rental_1',
-      materialName: 'Steel Scaffolding Set',
-      siteId: demoSiteId,
-      siteName: 'Villa Renovation',
-      startDate: '2026-03-10',
-      quantity: 15,
-      unit: 'Sets',
-      requiresDriver: true,
-      driverId: demoStaffId,
-      driverName: 'Siddharth Staff',
-      vehicleId: 'veh_1',
-      vehicleNumber: 'TN 38 P 1024',
-      transitCost: 350,
-      rentalRatePerDay: 40,
-      status: 'active',
-      notes: 'Exterior plastering scaffolding deployment',
-      createdAt: '2026-03-10T09:00:00.000Z'
-    }
-  ],
+  materialRentals: [],
   currentUser: null,
 };
 
@@ -217,56 +103,24 @@ function loadState(): AppState {
     const saved = localStorage.getItem('edamari_data');
     if (saved) {
       const parsed = JSON.parse(saved);
-      const state = {
+      // Auto-clear legacy demo records if present in browser localStorage
+      const hasOldDemoData =
+        parsed.staffList?.some((s: any) => s.id === 'staff_1772771203700') ||
+        parsed.sites?.some((s: any) => s.id === 'site_1772771203701');
+      if (hasOldDemoData) {
+        localStorage.removeItem('edamari_data');
+        localStorage.removeItem('edamari_payroll_paid');
+        localStorage.removeItem('edamari_payroll_history');
+        return defaultState;
+      }
+      return {
         ...defaultState,
         ...parsed,
         currentUser: null,
       };
-
-      // If the user has no logs or sites, inject the demo ones alongside their data
-      if (state.sites.length === 0) {
-        state.sites = defaultState.sites;
-      } else {
-        // Ensure other sites with stock exist for inter-site transfers
-        defaultState.sites.forEach(ds => {
-          if (!state.sites.some(s => s.id === ds.id)) {
-            state.sites.push(ds);
-          }
-        });
-      }
-
-      if (state.dailyLogs.length === 0) {
-        state.dailyLogs = defaultState.dailyLogs;
-      } else {
-        defaultState.dailyLogs.forEach(dl => {
-          if (!state.dailyLogs.some(l => l.id === dl.id)) {
-            state.dailyLogs.push(dl);
-          }
-        });
-      }
-
-      if (state.staffList.length === 0) state.staffList = defaultState.staffList;
-      if (state.customers.length === 0) state.customers = defaultState.customers;
-      if (!state.manualExpenses) state.manualExpenses = [];
-
-      if (!state.workEntries) state.workEntries = [];
-      if (!state.attendances) state.attendances = [];
-      if (!state.materialSettings) state.materialSettings = defaultState.materialSettings;
-      if (!state.suppliers || state.suppliers.length === 0) state.suppliers = defaultState.suppliers;
-      if (!state.vehicles || state.vehicles.length === 0) state.vehicles = defaultState.vehicles;
-      if (!state.materialRequests) state.materialRequests = [];
-      if (!state.labourTypes || state.labourTypes.length === 0) state.labourTypes = defaultState.labourTypes;
-      if (!state.materialRentals) state.materialRentals = defaultState.materialRentals;
-
-      return state;
     }
   } catch { }
   return defaultState;
-}
-
-function saveState(state: AppState) {
-  const { currentUser, ...rest } = state;
-  localStorage.setItem('edamari_data', JSON.stringify(rest));
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -274,20 +128,94 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(loadState);
   const [currentPortal, setCurrentPortal] = useState<'admin' | 'staff'>('admin');
+  const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
+  const [isInitialLoadDone, setIsInitialLoadDone] = useState<boolean>(false);
   const switchPortal = (portal: 'admin' | 'staff') => setCurrentPortal(portal);
 
+  // 1. Initial Load: Fetch live PostgreSQL data from Django backend
   useEffect(() => {
-    localStorage.setItem('edamari_data', JSON.stringify(state));
-  }, [state.staffList, state.sites, state.dailyLogs, state.customers, state.products, state.quotations, state.manualExpenses, state.vendors, state.workEntries, state.attendances, state.materialSettings, state.suppliers, state.vehicles, state.materialRequests, state.labourTypes, state.materialRentals]);
+    let isMounted = true;
+    async function loadFromBackend() {
+      try {
+        const health = await api.checkHealth();
+        if (health.status === 'online' && health.database === 'connected') {
+          if (isMounted) setIsBackendConnected(true);
+          const backendState = await api.fetchAppState();
+          if (isMounted && backendState) {
+            setState(prev => ({
+              ...prev,
+              ...backendState,
+              currentUser: prev.currentUser,
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn('Backend not reachable on initial load, using offline store:', err);
+      } finally {
+        if (isMounted) setIsInitialLoadDone(true);
+      }
+    }
+    loadFromBackend();
+    return () => { isMounted = false; };
+  }, []);
+
+  // 2. Persist to Backend & localStorage on any state changes
+  useEffect(() => {
+    if (!isInitialLoadDone) return;
+    const { currentUser, ...dataToSync } = state;
+    localStorage.setItem('edamari_data', JSON.stringify(dataToSync));
+
+    const timeout = setTimeout(() => {
+      api.syncAppState(dataToSync)
+        .then(() => setIsBackendConnected(true))
+        .catch(err => {
+          console.warn('Failed to sync changes with backend:', err);
+          setIsBackendConnected(false);
+        });
+    }, 350);
+
+    return () => clearTimeout(timeout);
+  }, [
+    state.staffList, state.sites, state.dailyLogs, state.customers,
+    state.products, state.quotations, state.manualExpenses, state.vendors,
+    state.workEntries, state.attendances, state.materialSettings,
+    state.suppliers, state.vehicles, state.materialRequests,
+    state.labourTypes, state.paymentStageMaster, state.materialRentals,
+    isInitialLoadDone
+  ]);
+
+  const clearAllData = async () => {
+    try {
+      await api.clearBackendData();
+    } catch (err) {
+      console.warn('Could not clear backend data:', err);
+    }
+    localStorage.removeItem('edamari_data');
+    localStorage.removeItem('edamari_payroll_paid');
+    localStorage.removeItem('edamari_payroll_history');
+    setState({ ...defaultState, currentUser: state.currentUser });
+  };
+
+  const refreshFromBackend = async () => {
+    try {
+      const backendState = await api.fetchAppState();
+      if (backendState) {
+        setState(prev => ({ ...prev, ...backendState, currentUser: prev.currentUser }));
+        setIsBackendConnected(true);
+      }
+    } catch (err) {
+      console.error('Refresh from backend failed:', err);
+    }
+  };
 
   const login = (id: string, password: string): boolean => {
-    if (id.trim() === 'admin' && password === ADMIN.password) {
+    const input = id.trim().toLowerCase();
+    if ((input === 'jgs' || input === 'admin') && (password === 'jgsconstruction*$' || password === 'admin123')) {
       setState(s => ({ ...s, currentUser: { id: 'admin', role: 'admin', adminPermissions: [] } }));
       setCurrentPortal('admin');
       return true;
     }
     // Staff can log in using their Name OR Phone Number OR raw ID — all case-insensitive
-    const input = id.trim().toLowerCase();
     const staff = state.staffList.find(s =>
       s.password && s.password === password && (
         s.id === id.trim() ||
@@ -713,6 +641,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addLabourType, removeLabourType,
       addPaymentStageMaster, removePaymentStageMaster,
       currentPortal, switchPortal,
+      isBackendConnected, clearAllData, refreshFromBackend,
     }}>
       {children}
     </AppContext.Provider>

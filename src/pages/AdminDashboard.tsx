@@ -44,7 +44,7 @@ export const ALL_NAV_ITEMS: { id: TabId; label: string; icon: React.ReactNode }[
 ];
 
 const AdminDashboard = () => {
-  const { logout, currentUser } = useApp();
+  const { logout, currentUser, isBackendConnected } = useApp();
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
   const { i18n } = useTranslation();
 
@@ -220,10 +220,17 @@ const AdminDashboard = () => {
                   {format(new Date(), 'EEEE, dd MMMM yyyy')}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold px-3 py-2 rounded-2xl">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Studio Live
-              </div>
+              {isBackendConnected ? (
+                <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold px-3 py-2 rounded-2xl" title="Django REST + PostgreSQL Connected">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  PostgreSQL Online
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 text-xs font-bold px-3 py-2 rounded-2xl" title="Connecting to Django backend">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  Connecting...
+                </div>
+              )}
             </div>
           </div>
 

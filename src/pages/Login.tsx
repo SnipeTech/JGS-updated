@@ -76,7 +76,6 @@ const Login = () => {
                 id="id"
                 value={id}
                 onChange={e => setId(e.target.value)}
-                placeholder="Your name or 'admin'"
                 className="mt-2 h-14 rounded-2xl bg-black/20 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-amber-500/50 text-base px-5 transition-all focus:bg-black/40"
               />
             </div>
@@ -113,14 +112,6 @@ const Login = () => {
             </Button>
           </form>
 
-        </div>
-
-        {/* Hint */}
-        <div className="mt-8 text-center">
-          <p className="text-xs px-5 py-2.5 rounded-full inline-block font-medium border border-white/10 bg-black/40 text-white/60 backdrop-blur-md shadow-xl">
-            Admin Access: <span className="font-bold text-white">admin</span>
-            {' '} / <span className="font-bold text-white">admin123</span>
-          </p>
         </div>
         
       </div>
