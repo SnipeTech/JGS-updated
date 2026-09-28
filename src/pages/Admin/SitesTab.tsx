@@ -40,7 +40,9 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
   const {
     sites, dailyLogs, updateSite, deleteSite, addDailyLog, currentUser, staffList, attendances,
     materialRequests, materialSettings, suppliers, vehicles, assignMaterialRequest, completeMaterialRequest, addMaterialRequest, paymentStageMaster,
-    materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental
+    materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental,
+    stageCompletionRequests, updateStageCompletionRequest,
+    manualExpenses
   } = useApp();
   const site = sites.find(s => s.id === siteId);
   const today = format(new Date(), 'yyyy-MM-dd');
@@ -1021,7 +1023,19 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         </div>
       </div>
 
-      <SitePaymentMilestones site={site} updateSite={updateSite} paymentStageMaster={paymentStageMaster} />
+      <SitePaymentMilestones
+        site={site}
+        updateSite={updateSite}
+        paymentStageMaster={paymentStageMaster}
+        stageCompletionRequests={stageCompletionRequests}
+        updateStageCompletionRequest={updateStageCompletionRequest}
+        dailyLogs={dailyLogs}
+        materialRequests={materialRequests}
+        materialRentals={materialRentals}
+        staffList={staffList}
+        manualExpenses={manualExpenses}
+        attendances={attendances}
+      />
 
       {/* Site Financial Statement: Income Given vs Total Expenses */}
       <Card className="p-4 sm:p-5 rounded-2xl bg-card border border-border/70 shadow-sm space-y-4">
@@ -2803,7 +2817,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
 // ── Sites Tab Main Component ──────────────────────────────
 export const SitesTab = () => {
-  const { sites, addSite, customers, addCustomer, staffList, materialRequests, materialRentals } = useApp();
+  const { sites, addSite, customers, addCustomer, staffList, materialRequests, materialRentals, stageCompletionRequests } = useApp();
   const { t } = useTranslation();
   const [name, setName] = useState('');
   const [addr, setAddr] = useState('');
@@ -3022,6 +3036,16 @@ export const SitesTab = () => {
                   return (
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
                       <RefreshCw className="w-3 h-3" /> {activeRentals.length} {activeRentals.length === 1 ? 'rental' : 'rentals'}
+                    </span>
+                  );
+                })()}
+                {(() => {
+                  const pendingForThisSite = (stageCompletionRequests || []).filter(r => r.siteId === s.id && r.status === 'pending');
+                  const hasStageApproval = pendingForThisSite.length > 0 || (s.paymentStages || []).some(st => st.completionStatus === 'completion_requested');
+                  if (!hasStageApproval) return null;
+                  return (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 animate-pulse">
+                      <CheckCircle2 className="w-3 h-3" /> Approval Requested
                     </span>
                   );
                 })()}

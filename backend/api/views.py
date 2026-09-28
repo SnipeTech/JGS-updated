@@ -8,7 +8,7 @@ from .models import (
     Staff, Site, Customer, Product, Quotation, ManualExpense,
     Vendor, WorkEntry, DailyLog, Attendance, MaterialSetting,
     MaterialRental, Supplier, Vehicle, MaterialRequest,
-    PayrollPaidStatus, PayrollHistory, AppConfig
+    PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest
 )
 from .serializers import (
     StaffSerializer, SiteSerializer, CustomerSerializer,
@@ -17,7 +17,7 @@ from .serializers import (
     AttendanceSerializer, MaterialSettingSerializer,
     MaterialRentalSerializer, SupplierSerializer, VehicleSerializer,
     MaterialRequestSerializer, PayrollPaidStatusSerializer,
-    PayrollHistorySerializer, AppConfigSerializer
+    PayrollHistorySerializer, AppConfigSerializer, StageCompletionRequestSerializer
 )
 
 
@@ -98,6 +98,7 @@ def sync_app_state(request):
         suppliers = to_camel_dict(SupplierSerializer(Supplier.objects.all(), many=True).data)
         vehicles = to_camel_dict(VehicleSerializer(Vehicle.objects.all(), many=True).data)
         material_requests = to_camel_dict(MaterialRequestSerializer(MaterialRequest.objects.all(), many=True).data)
+        stage_completion_requests = to_camel_dict(StageCompletionRequestSerializer(StageCompletionRequest.objects.all(), many=True).data)
         payroll_paid_status = to_camel_dict(PayrollPaidStatusSerializer(PayrollPaidStatus.objects.all(), many=True).data)
         payroll_history = to_camel_dict(PayrollHistorySerializer(PayrollHistory.objects.all(), many=True).data)
 
@@ -125,6 +126,7 @@ def sync_app_state(request):
             "vehicles": vehicles,
             "materialRequests": material_requests,
             "materialRentals": material_rentals,
+            "stageCompletionRequests": stage_completion_requests,
             "labourTypes": labour_types,
             "paymentStageMaster": payment_stage_master,
             "payrollPaidStatus": payroll_paid_status,
@@ -183,6 +185,8 @@ def sync_app_state(request):
                 upsert_items(Vehicle, data['vehicles'])
             if 'materialRequests' in data:
                 upsert_items(MaterialRequest, data['materialRequests'])
+            if 'stageCompletionRequests' in data:
+                upsert_items(StageCompletionRequest, data['stageCompletionRequests'])
             if 'payrollPaidStatus' in data:
                 upsert_items(PayrollPaidStatus, data['payrollPaidStatus'], id_field='key')
             if 'payrollHistory' in data:
@@ -212,6 +216,7 @@ def sync_app_state(request):
             Supplier.objects.all().delete()
             Vehicle.objects.all().delete()
             MaterialRequest.objects.all().delete()
+            StageCompletionRequest.objects.all().delete()
             PayrollPaidStatus.objects.all().delete()
             PayrollHistory.objects.all().delete()
             AppConfig.objects.all().delete()

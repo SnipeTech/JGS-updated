@@ -20,7 +20,7 @@ export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
   const myLogs = dailyLogs.filter(l => l.staffId === (staff?.id || currentUser?.id));
 
   return (
-    <div className="animate-slide-up w-full max-w-3xl">
+    <div className="animate-slide-up w-full">
       <div className="mb-4">
         <h2 className="section-header !mb-0.5">This Week (Mon–Sat)</h2>
         <p className="text-xs text-muted-foreground">Overview of work logs and site manpower across this work week.</p>
@@ -40,27 +40,25 @@ export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
                 {DAYS[i]}
               </p>
               <div
-                className={`w-10 h-10 rounded-2xl flex items-center justify-center text-xs font-bold transition-all ${
-                  isToday
+                className={`w-10 h-10 rounded-2xl flex items-center justify-center text-xs font-bold transition-all ${isToday
                     ? 'text-white shadow-md ring-2 ring-primary/30'
                     : hasLog
-                    ? 'text-white'
-                    : 'bg-muted text-muted-foreground'
-                }`}
+                      ? 'text-white'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
                 style={
                   isToday
                     ? { background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }
                     : hasLog
-                    ? { background: 'hsl(152 55% 35%)' }
-                    : {}
+                      ? { background: 'hsl(152 55% 35%)' }
+                      : {}
                 }
               >
                 {format(date, 'd')}
               </div>
               <div
-                className={`mt-1.5 w-1.5 h-1.5 rounded-full ${
-                  hasLog ? 'bg-emerald-500' : 'bg-transparent'
-                }`}
+                className={`mt-1.5 w-1.5 h-1.5 rounded-full ${hasLog ? 'bg-emerald-500' : 'bg-transparent'
+                  }`}
               />
             </div>
           );
@@ -68,7 +66,7 @@ export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
       </div>
 
       {/* Daily Logs Breakdown */}
-      <div className="space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {weekDates.map((date, i) => {
           const dateStr = format(date, 'yyyy-MM-dd');
           const logsOnDay = myLogs.filter(l => l.date === dateStr);
@@ -157,11 +155,11 @@ export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
         {weekDates.every(
           date => myLogs.filter(l => l.date === format(date, 'yyyy-MM-dd')).length === 0
         ) && (
-          <div className="text-center py-10 bg-card rounded-2xl border border-border/50">
-            <CalendarDays className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground font-medium">No work logged this week yet</p>
-          </div>
-        )}
+            <div className="text-center py-10 bg-card rounded-2xl border border-border/50">
+              <CalendarDays className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground font-medium">No work logged this week yet</p>
+            </div>
+          )}
       </div>
     </div>
   );

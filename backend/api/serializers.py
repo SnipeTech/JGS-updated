@@ -3,7 +3,7 @@ from .models import (
     Staff, Site, Customer, Product, Quotation, ManualExpense,
     Vendor, WorkEntry, DailyLog, Attendance, MaterialSetting,
     MaterialRental, Supplier, Vehicle, MaterialRequest,
-    PayrollPaidStatus, PayrollHistory, AppConfig
+    PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest
 )
 
 
@@ -113,3 +113,10 @@ class AppConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = AppConfig
         fields = '__all__'
+
+
+class StageCompletionRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StageCompletionRequest
+        fields = '__all__'
+

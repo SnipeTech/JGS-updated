@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Staff, Site, DailyLog, AppState, Customer, Product, Quotation, Invoice, Vendor, WorkEntry, Attendance, Supplier, MaterialRequest, Vehicle, MaterialRental } from '@/types';
+import { Staff, Site, DailyLog, AppState, Customer, Product, Quotation, Invoice, Vendor, WorkEntry, Attendance, Supplier, MaterialRequest, Vehicle, MaterialRental, StageCompletionRequest } from '@/types';
 import { calculateDuration } from '@/lib/utils';
 import { format } from 'date-fns';
 
@@ -71,6 +71,10 @@ interface AppContextType extends AppState {
   removeLabourType: (type: string) => void;
   addPaymentStageMaster: (stage: string) => void;
   removePaymentStageMaster: (stage: string) => void;
+  // Stage Completion Requests
+  stageCompletionRequests: StageCompletionRequest[];
+  addStageCompletionRequest: (request: Omit<StageCompletionRequest, 'id'>) => void;
+  updateStageCompletionRequest: (id: string, updates: Partial<StageCompletionRequest>) => void;
   currentPortal: 'admin' | 'staff';
   switchPortal: (portal: 'admin' | 'staff') => void;
 }
@@ -95,6 +99,7 @@ const defaultState: AppState = {
   labourTypes: ['painter', 'plumber', 'electrician', 'labour'],
   paymentStageMaster: ['Level 1: Foundation', 'Level 2: Ground Floor Slab', 'Level 3: Plastering', 'Level 4: Finishing & Handover'],
   materialRentals: [],
+  stageCompletionRequests: [],
   currentUser: null,
 };
 
@@ -181,7 +186,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state.workEntries, state.attendances, state.materialSettings,
     state.suppliers, state.vehicles, state.materialRequests,
     state.labourTypes, state.paymentStageMaster, state.materialRentals,
-    isInitialLoadDone
+    state.stageCompletionRequests, isInitialLoadDone
   ]);
 
   const clearAllData = async () => {
@@ -207,6 +212,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.error('Refresh from backend failed:', err);
     }
   };
+
+  // 3. Real-time Multi-Tab Sync (storage event) & Focus Refresh & Periodic Poll
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'edamari_data' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setState(prev => ({
+            ...prev,
+            ...parsed,
+            currentUser: prev.currentUser,
+          }));
+        } catch (err) {
+          console.error('Error syncing data from storage event:', err);
+        }
+      }
+    };
+
+    const handleFocus = () => {
+      refreshFromBackend();
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('focus', handleFocus);
+
+    const pollInterval = setInterval(() => {
+      if (isBackendConnected) {
+        refreshFromBackend();
+      }
+    }, 12000);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(pollInterval);
+    };
+  }, [isBackendConnected]);
 
   const login = (id: string, password: string): boolean => {
     const input = id.trim().toLowerCase();
@@ -591,6 +633,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const addStageCompletionRequest = (request: Omit<StageCompletionRequest, 'id'>) => {
+    const newRequest: StageCompletionRequest = {
+      ...request,
+      id: `scr_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    };
+    setState(s => ({
+      ...s,
+      stageCompletionRequests: [newRequest, ...(s.stageCompletionRequests || [])]
+    }));
+  };
+
+  const updateStageCompletionRequest = (id: string, updates: Partial<StageCompletionRequest>) => {
+    setState(s => ({
+      ...s,
+      stageCompletionRequests: (s.stageCompletionRequests || []).map(r => r.id === id ? { ...r, ...updates } : r)
+    }));
+  };
+
   const addMaterialRental = (rental: Omit<MaterialRental, 'id' | 'createdAt'>) => {
     const newRental: MaterialRental = {
       ...rental,
@@ -640,6 +700,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       assignMaterialRequest, completeMaterialRequest,
       addLabourType, removeLabourType,
       addPaymentStageMaster, removePaymentStageMaster,
+      stageCompletionRequests: state.stageCompletionRequests || [],
+      addStageCompletionRequest, updateStageCompletionRequest,
       currentPortal, switchPortal,
       isBackendConnected, clearAllData, refreshFromBackend,
     }}>

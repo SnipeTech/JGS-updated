@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Clock, MapPin, Users, Search } from 'lucide-react';
+import { Clock, MapPin, Users, Search, Layers } from 'lucide-react';
 import { Staff } from '@/types';
 
 interface WorkHistoryTabProps {
@@ -28,7 +28,7 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
   });
 
   return (
-    <div className="animate-slide-up max-w-3xl space-y-4">
+    <div className="animate-slide-up w-full space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
         <div>
           <h2 className="section-header !mb-0">Work History</h2>
@@ -55,7 +55,7 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredLogs.map(log => (
             <Card key={log.id} className="list-card p-4">
               <div className="flex justify-between items-start mb-1.5">
@@ -72,6 +72,15 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
                   {log.date}
                 </span>
               </div>
+
+              {log.workLevelStage && (
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Layers className="w-3 h-3 text-primary" />
+                  <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full border border-primary/20">
+                    {log.workLevelStage}
+                  </span>
+                </div>
+              )}
 
               {log.workerCounts && (log.workerCounts.painter > 0 || log.workerCounts.plumber > 0 || log.workerCounts.labour > 0) && (
                 <div className="flex flex-wrap gap-1.5 mt-2 mb-1">

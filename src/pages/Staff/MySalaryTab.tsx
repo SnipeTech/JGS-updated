@@ -105,7 +105,7 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
       if (isDriver) {
         driverTrips = (materialRequests || []).filter(
           r => (r.driverId === staff.id || r.driverName?.toLowerCase() === staff.name.toLowerCase()) &&
-               (r.date === att.date || r.createdAt?.startsWith(att.date))
+            (r.date === att.date || r.createdAt?.startsWith(att.date))
         );
         transitPay = driverTrips.reduce((acc, r) => acc + (r.driverCost || 0), 0);
         tripCount += driverTrips.length;
@@ -248,7 +248,7 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
         1: { halign: 'center' },
         2: { halign: 'right', fontStyle: 'bold' },
       },
-      didParseCell: function(data) {
+      didParseCell: function (data) {
         if (data.row.index === body.length - 1) {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.fillColor = [236, 253, 245];
@@ -275,7 +275,7 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
   };
 
   return (
-    <div className="space-y-4 animate-slide-up">
+    <div className="space-y-4 animate-slide-up w-full">
       {/* Quick Period Selector Tabs */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card p-4 rounded-2xl border border-border/50 shadow-xs">
         <div>
@@ -297,11 +297,10 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
             <button
               key={opt.id}
               onClick={() => setFilterMode(opt.id)}
-              className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-                filterMode === opt.id
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${filterMode === opt.id
                   ? 'bg-card text-foreground shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
-              }`}
+                }`}
             >
               {opt.label}
             </button>
@@ -430,11 +429,10 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
                 : 'No worked days recorded in this period'}
             </p>
             <div className="mt-2.5">
-              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
-                isPaid
+              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${isPaid
                   ? 'bg-emerald-500 text-white shadow-xs'
                   : 'bg-black/25 text-white/90 border border-white/30'
-              }`}>
+                }`}>
                 {isPaid ? (
                   <>
                     <CheckCircle2 className="w-3.5 h-3.5" />
@@ -560,7 +558,7 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
             <p className="mt-0.5">Choose another week, month, or adjust the date range above.</p>
           </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {reportData.logs.map(log => {
               let formattedDate = log.date;
               try {
@@ -580,13 +578,12 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
 
                     <div className="flex items-center gap-2">
                       <span
-                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
-                          log.status === 'present'
+                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${log.status === 'present'
                             ? 'bg-emerald-500/15 text-emerald-600'
                             : log.status === 'half-day'
-                            ? 'bg-amber-500/15 text-amber-600'
-                            : 'bg-destructive/15 text-destructive'
-                        }`}
+                              ? 'bg-amber-500/15 text-amber-600'
+                              : 'bg-destructive/15 text-destructive'
+                          }`}
                       >
                         {log.status}
                       </span>
@@ -670,7 +667,7 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
             No past payout settlements recorded yet. Once office marks your salary paid, salary slips will be available here.
           </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {myPaidRecords.map(record => (
               <Card
                 key={record.id}

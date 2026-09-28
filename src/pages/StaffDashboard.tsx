@@ -108,11 +108,10 @@ const StaffDashboard = () => {
               <button
                 key={item.id}
                 onClick={() => setActiveSection(item.id)}
-                className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all duration-200 text-sm group ${
-                  isActive
+                className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all duration-200 text-sm group ${isActive
                     ? 'bg-gradient-to-r from-amber-500/20 via-amber-500/10 to-transparent text-amber-300 font-bold border border-amber-500/30 shadow-sm'
                     : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 font-medium hover:translate-x-0.5'
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <span className={`transition-colors ${isActive ? 'text-amber-400' : 'text-zinc-400 group-hover:text-zinc-200'}`}>
@@ -165,8 +164,8 @@ const StaffDashboard = () => {
       </aside>
 
       {/* ── Main Content Area ── */}
-      <div className="flex-1 md:ml-72 flex flex-col min-w-0">
-        <div className="page-container flex-1 py-6 px-4 md:px-8">
+      <div className="flex-1 md:ml-72 flex flex-col min-w-0 h-[100dvh] overflow-y-auto pb-20 md:pb-0">
+        <div className="page-container flex-1">
           {/* Mobile Header */}
           <div className="flex md:hidden items-center justify-between mb-4 p-3 rounded-2xl bg-[#121110] text-zinc-100 border border-amber-950/40 shadow-lg animate-slide-up">
             <div className="flex items-center gap-3">
@@ -220,7 +219,7 @@ const StaffDashboard = () => {
 
           {/* Today summary indicator */}
           {activeSection === 'log' && (
-            <div className="flex items-center gap-3.5 mb-6 animate-slide-up-delay-1 bg-gradient-to-r from-amber-500/10 via-card to-card border border-amber-500/30 rounded-2xl p-4 shadow-luxury max-w-3xl">
+            <div className="flex items-center gap-3.5 mb-6 animate-slide-up-delay-1 bg-gradient-to-r from-amber-500/10 via-card to-card border border-amber-500/30 rounded-2xl p-4 shadow-luxury w-full">
               <div
                 className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 shadow-xs"
                 style={{ background: 'hsl(38 78% 45% / 0.18)' }}
@@ -235,11 +234,10 @@ const StaffDashboard = () => {
               </div>
               <div className="ml-auto">
                 <span
-                  className={`text-[10px] font-bold px-3 py-1.5 rounded-full border ${
-                    myTodayLogs.length > 0 
-                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30' 
+                  className={`text-[10px] font-bold px-3 py-1.5 rounded-full border ${myTodayLogs.length > 0
+                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
                       : 'bg-muted text-muted-foreground border-border'
-                  }`}
+                    }`}
                 >
                   {myTodayLogs.length > 0 ? '✓ Active Today' : 'Pending Entry'}
                 </span>
@@ -260,11 +258,10 @@ const StaffDashboard = () => {
               <button
                 key={id}
                 onClick={() => setActiveSection(id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold rounded-xl transition-all whitespace-nowrap shrink-0 ${
-                  activeSection === id
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold rounded-xl transition-all whitespace-nowrap shrink-0 ${activeSection === id
                     ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-bold shadow-xs'
                     : 'text-zinc-400 hover:text-zinc-200'
-                }`}
+                  }`}
               >
                 {icon}{label}
               </button>

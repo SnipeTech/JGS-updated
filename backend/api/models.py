@@ -95,6 +95,7 @@ class ManualExpense(models.Model):
     amount = models.FloatField(default=0)
     category = models.CharField(max_length=100, blank=True, default='')
     description = models.TextField(blank=True, default='')
+    work_level_stage = models.CharField(max_length=200, blank=True, default='')
 
 
 class Vendor(models.Model):
@@ -137,6 +138,7 @@ class DailyLog(models.Model):
     notes = models.TextField(blank=True, default='')
     worker_ids = models.JSONField(default=list, blank=True)
     worker_counts = models.JSONField(default=dict, blank=True)
+    work_level_stage = models.CharField(max_length=200, blank=True, default='')
 
 
 class Attendance(models.Model):
@@ -235,6 +237,7 @@ class MaterialRequest(models.Model):
     items = models.JSONField(default=list, blank=True)
     notes = models.TextField(blank=True, default='')
     status = models.CharField(max_length=50, default='pending')
+    work_level_stage = models.CharField(max_length=200, blank=True, default='')
 
     source_type = models.CharField(max_length=50, blank=True, default='')
     source_site_id = models.CharField(max_length=64, blank=True, default='')
@@ -313,3 +316,21 @@ class AppConfig(models.Model):
 
     def __str__(self):
         return self.key
+
+
+class StageCompletionRequest(models.Model):
+    id = models.CharField(max_length=64, primary_key=True, default=generate_str_id)
+    site_id = models.CharField(max_length=64, blank=True, default='')
+    site_name = models.CharField(max_length=200, blank=True, default='')
+    stage_name = models.CharField(max_length=200, blank=True, default='')
+    requested_by_staff_id = models.CharField(max_length=64, blank=True, default='')
+    requested_by_staff_name = models.CharField(max_length=150, blank=True, default='')
+    requested_at = models.CharField(max_length=50, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=50, default='pending')
+    admin_note = models.TextField(blank=True, default='')
+    reviewed_at = models.CharField(max_length=50, blank=True, default='')
+
+    def __str__(self):
+        return f"{self.site_name} - {self.stage_name} ({self.status})"
+

@@ -22,9 +22,9 @@ interface MaterialRequestTabProps {
 }
 
 export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRequestTabProps) => {
-  const { sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest } = useApp();
+  const { sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest, paymentStageMaster } = useApp();
 
-  const [reqSiteId, setReqSiteId] = useState(initialSiteId || '');
+  const [reqSiteId, setReqSiteId] = useState(initialSiteId || localStorage.getItem('today_active_site_id') || '');
   const [reqSourceType, setReqSourceType] = useState<'supplier' | 'site'>('supplier');
   const [reqSourceSiteId, setReqSourceSiteId] = useState('');
   const [reqItems, setReqItems] = useState<MaterialRequestItem[]>([
@@ -33,7 +33,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
   const [reqNotes, setReqNotes] = useState('');
   const [reqStatusFilter, setReqStatusFilter] = useState<'all' | 'pending' | 'assigned' | 'completed'>('all');
 
-  const destinationReqSiteId = reqSiteId || (mySites.length > 0 ? mySites[0].id : (sites[0]?.id || ''));
+  const destinationReqSiteId = reqSiteId || localStorage.getItem('today_active_site_id') || (mySites.length > 0 ? mySites[0].id : (sites[0]?.id || ''));
 
   // Other sites available as source
   const otherSites = useMemo(() => {
@@ -166,6 +166,17 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
       }
     }
 
+    // Automatically link requisition to the active construction level/stage for the destination site
+    const masterStages = paymentStageMaster.length > 0 ? paymentStageMaster : (targetSite.paymentStages || []).map(s => s.stageName);
+    let activeStageForReq: string | undefined = undefined;
+    for (const st of masterStages) {
+      const sData = (targetSite.paymentStages || []).find(s => s.stageName === st);
+      if (!sData || sData.completionStatus !== 'completed') {
+        activeStageForReq = st;
+        break;
+      }
+    }
+
     addMaterialRequest({
       siteId: targetSite.id,
       siteName: targetSite.name,
@@ -183,12 +194,13 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
       })),
       notes: (reqSourceType === 'site' ? `[Inter-Site Transfer from ${sourceSite?.name}] ` : '') + (reqNotes.trim() || ''),
       status: 'pending',
+      workLevelStage: activeStageForReq,
       date: format(new Date(), 'yyyy-MM-dd'),
       time: format(new Date(), 'hh:mm a')
     });
 
-    toast.success(reqSourceType === 'site' 
-      ? `Inter-site material transfer request submitted to Admin!` 
+    toast.success(reqSourceType === 'site'
+      ? `Inter-site material transfer request submitted to Admin!`
       : 'Material requisition submitted to Admin!'
     );
     setReqItems([{ name: '', quantity: 1, unit: 'Bags' }]);
@@ -196,7 +208,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
   };
 
   return (
-    <div className="animate-slide-up-delay-2 max-w-3xl space-y-6">
+    <div className="animate-slide-up-delay-2 w-full space-y-6">
       {/* Requisition Creation Card */}
       <div className="form-card">
         <div className="flex items-center gap-2.5 mb-4">
@@ -223,11 +235,10 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                   setReqSourceType('supplier');
                   setReqItems([{ name: '', quantity: 1, unit: 'Bags' }]);
                 }}
-                className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                  reqSourceType === 'supplier'
+                className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${reqSourceType === 'supplier'
                     ? 'bg-primary text-white shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
-                }`}
+                  }`}
               >
                 <Building2 className="w-4 h-4" /> Order from Supplier / New Purchase
               </button>
@@ -240,11 +251,10 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                   }
                   setReqItems([{ name: '', quantity: 1, unit: 'Units' }]);
                 }}
-                className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                  reqSourceType === 'site'
+                className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${reqSourceType === 'site'
                     ? 'bg-primary text-white shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
-                }`}
+                  }`}
               >
                 <ArrowRightLeft className="w-4 h-4" /> Get from Another Site ({sourceSitesWithStock.length} Available)
               </button>
@@ -537,11 +547,10 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                 key={tab}
                 type="button"
                 onClick={() => setReqStatusFilter(tab)}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold capitalize transition-all ${
-                  reqStatusFilter === tab
+                className={`px-3 py-1 rounded-lg text-xs font-semibold capitalize transition-all ${reqStatusFilter === tab
                     ? 'bg-card text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
-                }`}
+                  }`}
               >
                 {tab}
               </button>
@@ -608,7 +617,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                               try {
                                 const d = new Date(req.createdAt);
                                 if (!isNaN(d.getTime())) return format(d, 'dd MMM yyyy, hh:mm a');
-                              } catch {}
+                              } catch { }
                             }
                             return `${req.date || 'Today'} ${req.time || ''}`.trim();
                           })()}

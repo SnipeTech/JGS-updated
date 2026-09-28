@@ -196,7 +196,14 @@ export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: 
             {eRole !== 'supervisor' && eRole !== 'driver' && eRole !== 'admin' && (
               <div>
                 <Label className="text-xs font-semibold text-muted-foreground">Assign Supervisor</Label>
-                <Select value={eSupervisorId} onValueChange={setESupervisorId}>
+                <Select value={eSupervisorId} onValueChange={(val) => {
+                  setESupervisorId(val);
+                  const sup = supervisors.find(s => s.id === val);
+                  if (sup) {
+                    if (sup.underLabourSalary) setEPerDaySalary(sup.underLabourSalary.toString());
+                    if (sup.underLabourOT) setEIncentive(sup.underLabourOT.toString());
+                  }
+                }}>
                   <SelectTrigger className="mt-1 h-10 rounded-xl">
                     <SelectValue placeholder="Select Supervisor" />
                   </SelectTrigger>
@@ -477,7 +484,14 @@ export const StaffTab = () => {
               {role !== 'supervisor' && role !== 'driver' && role !== 'admin' && (
                 <div>
                   <Label className="text-xs font-semibold text-muted-foreground">Assign Supervisor *</Label>
-                  <Select value={supervisorId} onValueChange={setSupervisorId}>
+                  <Select value={supervisorId} onValueChange={(val) => {
+                    setSupervisorId(val);
+                    const sup = supervisors.find(s => s.id === val);
+                    if (sup) {
+                      if (sup.underLabourSalary) setPerDaySalary(sup.underLabourSalary.toString());
+                      if (sup.underLabourOT) setIncentive(sup.underLabourOT.toString());
+                    }
+                  }}>
                     <SelectTrigger className="mt-1 h-10 rounded-xl text-xs">
                       <SelectValue placeholder="Select Supervisor" />
                     </SelectTrigger>

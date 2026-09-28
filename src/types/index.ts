@@ -31,6 +31,25 @@ export interface SitePaymentStage {
   paidAmount: number;
   dueDate?: string;
   payments: SitePayment[];
+  workDescription?: string;
+  stepsTaken?: string;
+  expenseStatus?: 'under_control' | 'high';
+  highExpenseReason?: string;
+  completionStatus?: 'pending' | 'in_progress' | 'completion_requested' | 'completed';
+}
+
+export interface StageCompletionRequest {
+  id: string;
+  siteId: string;
+  siteName: string;
+  stageName: string;
+  requestedByStaffId: string;
+  requestedByStaffName: string;
+  requestedAt: string;
+  notes?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  adminNote?: string;
+  reviewedAt?: string;
 }
 
 export interface Site {
@@ -103,6 +122,7 @@ export interface ManualExpense {
   amount: number;
   category: string;
   description: string;
+  workLevelStage?: string;
 }
 
 export interface Vendor {
@@ -158,6 +178,7 @@ export interface DailyLog {
   notes: string;
   workerIds?: string[];
   workerCounts?: LabourCount;
+  workLevelStage?: string;
 }
 
 export interface LabourCount {
@@ -293,6 +314,7 @@ export interface MaterialRequest {
   items: MaterialRequestItem[];
   notes?: string;
   status: 'pending' | 'assigned' | 'completed' | 'cancelled';
+  workLevelStage?: string;
   
   // Sourcing (Supplier vs Inter-Site Transfer):
   sourceType?: 'supplier' | 'site';
@@ -363,5 +385,6 @@ export interface AppState {
   labourTypes: string[];
   paymentStageMaster: string[];
   materialRentals: MaterialRental[];
+  stageCompletionRequests: StageCompletionRequest[];
   currentUser: { id: string; role: 'admin' | 'staff'; adminPermissions?: string[] } | null;
 }

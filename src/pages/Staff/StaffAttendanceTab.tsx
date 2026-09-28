@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { format, addDays } from 'date-fns';
 import {
   CalendarDays, Clock, Users, UserCircle, Truck, ChevronLeft, ChevronRight,
-  Plus, Minus, AlertCircle, Trash2, MapPin
+  Plus, Minus, AlertCircle, Trash2, MapPin, CheckCircle2
 } from 'lucide-react';
 import { Staff } from '@/types';
 
@@ -18,7 +18,7 @@ interface StaffAttendanceTabProps {
 }
 
 export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
-  const { attendances, saveAttendance, staffList, sites, materialRequests, currentUser } = useApp();
+  const { attendances, saveAttendance, staffList, sites, materialRequests, currentUser, paymentStageMaster } = useApp();
 
   const [attendanceDate, setAttendanceDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [teamAttView, setTeamAttView] = useState<'daily' | 'history'>('daily');
@@ -63,7 +63,7 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
   };
 
   return (
-    <div className="animate-slide-up w-full max-w-3xl">
+    <div className="animate-slide-up w-full">
       {isSupervisor ? (
         /* SUPERVISOR VIEW */
         <div>
@@ -88,125 +88,125 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                 {[staff]
                   .filter(Boolean)
                   .map(s => {
-                  const historyLogs = attendances
-                    .filter(a => a.staffId === s!.id)
-                    .sort((a, b) => b.date.localeCompare(a.date));
-                  if (historyLogs.length === 0) return null;
+                    const historyLogs = attendances
+                      .filter(a => a.staffId === s!.id)
+                      .sort((a, b) => b.date.localeCompare(a.date));
+                    if (historyLogs.length === 0) return null;
 
-                  const isSup = s!.role === 'supervisor';
-                  const isDrv = s!.role === 'driver';
-                  const presentCount = historyLogs.filter(l => l.status === 'present').length;
-                  const halfDayCount = historyLogs.filter(l => l.status === 'half-day').length;
-                  const totalOt = historyLogs.reduce((sum, l) => sum + (l.otHours || 0), 0);
+                    const isSup = s!.role === 'supervisor';
+                    const isDrv = s!.role === 'driver';
+                    const presentCount = historyLogs.filter(l => l.status === 'present').length;
+                    const halfDayCount = historyLogs.filter(l => l.status === 'half-day').length;
+                    const totalOt = historyLogs.reduce((sum, l) => sum + (l.otHours || 0), 0);
 
-                  return (
-                    <div key={s!.id} className="space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-muted/40 rounded-xl border border-border/50">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-sm text-foreground">{s!.name}</h4>
-                          <span className="text-[10px] text-muted-foreground uppercase font-extrabold px-2 py-0.5 rounded-full bg-muted">
-                            {s!.role}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
-                          <span className="bg-emerald-500/10 text-emerald-600 px-2 py-0.5 rounded-md">
-                            {presentCount} Full Days
-                          </span>
-                          {halfDayCount > 0 && (
-                            <span className="bg-amber-500/10 text-amber-600 px-2 py-0.5 rounded-md">
-                              {halfDayCount} Half Days
+                    return (
+                      <div key={s!.id} className="space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-muted/40 rounded-xl border border-border/50">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-sm text-foreground">{s!.name}</h4>
+                            <span className="text-[10px] text-muted-foreground uppercase font-extrabold px-2 py-0.5 rounded-full bg-muted">
+                              {s!.role}
                             </span>
-                          )}
-                          <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md">
-                            {totalOt}h OT
-                          </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                            <span className="bg-emerald-500/10 text-emerald-600 px-2 py-0.5 rounded-md">
+                              {presentCount} Full Days
+                            </span>
+                            {halfDayCount > 0 && (
+                              <span className="bg-amber-500/10 text-amber-600 px-2 py-0.5 rounded-md">
+                                {halfDayCount} Half Days
+                              </span>
+                            )}
+                            <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md">
+                              {totalOt}h OT
+                            </span>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="space-y-2">
-                        {historyLogs.map(log => {
-                          let driverTrips: any[] = [];
-                          if (isDrv) {
-                            driverTrips = (materialRequests || []).filter(
-                              r => (r.driverId === s!.id || r.driverName?.toLowerCase() === s!.name.toLowerCase()) &&
-                                   (r.date === log.date || r.createdAt?.startsWith(log.date))
-                            );
-                          }
+                        <div className="space-y-2">
+                          {historyLogs.map(log => {
+                            let driverTrips: any[] = [];
+                            if (isDrv) {
+                              driverTrips = (materialRequests || []).filter(
+                                r => (r.driverId === s!.id || r.driverName?.toLowerCase() === s!.name.toLowerCase()) &&
+                                  (r.date === log.date || r.createdAt?.startsWith(log.date))
+                              );
+                            }
 
-                          let unCount = 0;
-                          let unOtHours = 0;
-                          let unOtStaff = 0;
-                          if (isSup && log.presentCounts) {
-                            unCount =
-                              (log.presentCounts.painter || 0) +
-                              (log.presentCounts.plumber || 0) +
-                              (log.presentCounts.labour || 0);
-                            unOtHours = log.unnamedOtHours !== undefined ? log.unnamedOtHours : 0;
-                            unOtStaff =
-                              log.unnamedOtStaffCount !== undefined
-                                ? log.unnamedOtStaffCount
-                                : unOtHours > 0
-                                  ? unCount
-                                  : 0;
-                          }
+                            let unCount = 0;
+                            let unOtHours = 0;
+                            let unOtStaff = 0;
+                            if (isSup && log.presentCounts) {
+                              unCount =
+                                (log.presentCounts.painter || 0) +
+                                (log.presentCounts.plumber || 0) +
+                                (log.presentCounts.labour || 0);
+                              unOtHours = log.unnamedOtHours !== undefined ? log.unnamedOtHours : 0;
+                              unOtStaff =
+                                log.unnamedOtStaffCount !== undefined
+                                  ? log.unnamedOtStaffCount
+                                  : unOtHours > 0
+                                    ? unCount
+                                    : 0;
+                            }
 
-                          let formattedDate = log.date;
-                          try {
-                            formattedDate = format(new Date(log.date + 'T00:00:00'), 'dd MMM yyyy, EEEE');
-                          } catch { }
+                            let formattedDate = log.date;
+                            try {
+                              formattedDate = format(new Date(log.date + 'T00:00:00'), 'dd MMM yyyy, EEEE');
+                            } catch { }
 
-                          return (
-                            <div key={log.id} className="p-3 rounded-2xl bg-card border border-border/50 space-y-2 shadow-xs">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5">
-                                  <CalendarDays className="w-3.5 h-3.5 text-primary" /> {formattedDate}
-                                </p>
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${log.status === 'present'
+                            return (
+                              <div key={log.id} className="p-3 rounded-2xl bg-card border border-border/50 space-y-2 shadow-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5">
+                                    <CalendarDays className="w-3.5 h-3.5 text-primary" /> {formattedDate}
+                                  </p>
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${log.status === 'present'
                                         ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
                                         : log.status === 'half-day'
                                           ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                                           : 'bg-destructive/15 text-destructive'
-                                      }`}
-                                  >
-                                    {log.status}
-                                  </span>
+                                        }`}
+                                    >
+                                      {log.status}
+                                    </span>
 
-                                  {log.otHours && log.otHours > 0 ? (
-                                    <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md border border-amber-500/20">
-                                      ⏰ {log.otHours} hrs OT
-                                    </span>
-                                  ) : (
-                                    <span className="text-[11px] text-muted-foreground bg-muted/40 px-2 py-0.5 rounded-md">
-                                      No OT
-                                    </span>
-                                  )}
+                                    {log.otHours && log.otHours > 0 ? (
+                                      <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md border border-amber-500/20">
+                                        ⏰ {log.otHours} hrs OT
+                                      </span>
+                                    ) : (
+                                      <span className="text-[11px] text-muted-foreground bg-muted/40 px-2 py-0.5 rounded-md">
+                                        No OT
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
+
+                                {(isDrv || isSup) && (
+                                  <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-muted-foreground border-t border-border/30">
+                                    {isDrv && (
+                                      <span>
+                                        🚚 {driverTrips.length} dispatch delivery {driverTrips.length === 1 ? 'trip' : 'trips'}
+                                      </span>
+                                    )}
+                                    {isSup && unCount > 0 && (
+                                      <span>
+                                        👥 {unCount} unnamed workers ({log.presentCounts?.painter || 0} painters, {log.presentCounts?.plumber || 0} plumbers, {log.presentCounts?.labour || 0} labourers)
+                                        {unOtHours > 0 ? ` · ${unOtStaff} crew on ${unOtHours}h OT` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
-
-                              {(isDrv || isSup) && (
-                                <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-muted-foreground border-t border-border/30">
-                                  {isDrv && (
-                                    <span>
-                                      🚚 {driverTrips.length} dispatch delivery {driverTrips.length === 1 ? 'trip' : 'trips'}
-                                    </span>
-                                  )}
-                                  {isSup && unCount > 0 && (
-                                    <span>
-                                      👥 {unCount} unnamed workers ({log.presentCounts?.painter || 0} painters, {log.presentCounts?.plumber || 0} plumbers, {log.presentCounts?.labour || 0} labourers)
-                                      {unOtHours > 0 ? ` · ${unOtStaff} crew on ${unOtHours}h OT` : ''}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             </div>
           ) : (
@@ -394,6 +394,102 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                           )}
                         </div>
                       )}
+
+                      {/* Site Selection & Active Level Indicator for Supervisor */}
+                      {isActive && isSup && (
+                        <div className="pt-3 border-t border-border/40 space-y-2.5">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-primary" /> Today's Assigned Project Site *
+                            </Label>
+                            <span className="text-[11px] text-muted-foreground">
+                              Select where you are working today to auto-sync daily work & expenses
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <Select
+                              value={att?.siteId || ''}
+                              disabled={isDaySubmitted}
+                              onValueChange={(val) => {
+                                const current = att || { staffId: s!.id, date: attendanceDate, status: 'present' };
+                                saveAttendance({ ...current, siteId: val });
+                                localStorage.setItem('today_active_site_id', val);
+                                toast.success("Today's site assigned!");
+                              }}
+                            >
+                              <SelectTrigger className="h-10 rounded-xl text-xs bg-muted/30 border-border/60">
+                                <SelectValue placeholder="Select Today's Site..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {sites
+                                  .filter(site => site.status !== 'completed')
+                                  .map(site => (
+                                    <SelectItem key={site.id} value={site.id}>
+                                      {site.name} {site.clientName ? `(${site.clientName})` : ''}
+                                    </SelectItem>
+                                  ))}
+                              </SelectContent>
+                            </Select>
+
+                            {/* Active Stage Pill for this site */}
+                            {(() => {
+                              const selectedSiteObj = sites.find(st => st.id === att?.siteId);
+                              if (!selectedSiteObj) {
+                                return (
+                                  <div className="flex items-center text-xs text-muted-foreground p-2.5 rounded-xl bg-muted/20 border border-dashed border-border/50">
+                                    Select a site above to view its current active level
+                                  </div>
+                                );
+                              }
+
+                              const masterStages = paymentStageMaster.length > 0
+                                ? paymentStageMaster
+                                : (selectedSiteObj.paymentStages || []).map(st => st.stageName);
+
+                              let activeStageName = '';
+                              let activeStageLevel = 1;
+                              let activeStageStatus = 'pending';
+
+                              for (let i = 0; i < masterStages.length; i++) {
+                                const name = masterStages[i];
+                                const stData = (selectedSiteObj.paymentStages || []).find(st => st.stageName === name);
+                                const isCompleted = stData?.completionStatus === 'completed';
+                                if (!isCompleted && !activeStageName) {
+                                  activeStageName = name;
+                                  activeStageLevel = i + 1;
+                                  activeStageStatus = stData?.completionStatus || 'in_progress';
+                                  break;
+                                }
+                              }
+
+                              if (!activeStageName) {
+                                return (
+                                  <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600 bg-emerald-500/10 border border-emerald-500/25 px-3 py-2 rounded-xl">
+                                    <CheckCircle2 className="w-4 h-4 shrink-0" /> All project milestones completed!
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-primary/10 border border-primary/25 text-xs">
+                                  <div className="min-w-0">
+                                    <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
+                                      Current Active Construction Level
+                                    </p>
+                                    <p className="font-bold text-foreground truncate">
+                                      Level {activeStageLevel}: {activeStageName}
+                                    </p>
+                                  </div>
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary text-white shrink-0">
+                                    {activeStageStatus === 'completion_requested' ? 'Pending Approval' : 'In Progress'}
+                                  </span>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      )}
                     </Card>
                   );
                 })}
@@ -440,9 +536,10 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
 
                     const addAssignment = () => {
                       const current = myAtt || { staffId: staff.id, date: attendanceDate, status: 'present' };
+                      const defaultSite = myAtt?.siteId || localStorage.getItem('today_active_site_id') || '';
                       saveAttendance({
                         ...current,
-                        siteAssignments: [...siteAssignments, { siteId: '', counts: { painter: 0, plumber: 0, labour: 0 } }]
+                        siteAssignments: [...siteAssignments, { siteId: defaultSite, counts: { painter: 0, plumber: 0, labour: 0 } }]
                       });
                     };
 
@@ -484,7 +581,7 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                               <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">
                                 Total Unnamed Crew Present Today
                               </h4>
-                              
+
                             </div>
                             <span className="text-xs font-bold px-3 py-1 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
                               {totalUnnamed} Workers Logged
@@ -1010,10 +1107,10 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                           </div>
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${trip.status === 'completed'
-                                ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/25'
-                                : trip.status === 'assigned'
-                                  ? 'bg-blue-500/15 text-blue-600 border border-blue-500/25'
-                                  : 'bg-amber-500/15 text-amber-600 border border-amber-500/25'
+                              ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/25'
+                              : trip.status === 'assigned'
+                                ? 'bg-blue-500/15 text-blue-600 border border-blue-500/25'
+                                : 'bg-amber-500/15 text-amber-600 border border-amber-500/25'
                               }`}
                           >
                             {trip.status === 'completed'
@@ -1081,7 +1178,7 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                     if (isDrv) {
                       driverTrips = (materialRequests || []).filter(
                         r => (r.driverId === staff?.id || r.driverName?.toLowerCase() === staff?.name.toLowerCase()) &&
-                             (r.date === h.date || r.createdAt?.startsWith(h.date))
+                          (r.date === h.date || r.createdAt?.startsWith(h.date))
                       );
                     }
 
@@ -1103,13 +1200,12 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
 
                           <div className="flex items-center gap-2">
                             <span
-                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                h.status === 'present'
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${h.status === 'present'
                                   ? 'bg-emerald-500/15 text-emerald-600'
                                   : h.status === 'half-day'
-                                  ? 'bg-amber-500/15 text-amber-600'
-                                  : 'bg-destructive/15 text-destructive'
-                              }`}
+                                    ? 'bg-amber-500/15 text-amber-600'
+                                    : 'bg-destructive/15 text-destructive'
+                                }`}
                             >
                               {h.status}
                             </span>

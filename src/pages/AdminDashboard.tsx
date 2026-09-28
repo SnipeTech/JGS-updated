@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
@@ -44,9 +44,17 @@ export const ALL_NAV_ITEMS: { id: TabId; label: string; icon: React.ReactNode }[
 ];
 
 const AdminDashboard = () => {
-  const { logout, currentUser, isBackendConnected } = useApp();
+  const { logout, currentUser, isBackendConnected, stageCompletionRequests, materialRequests } = useApp();
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
   const { i18n } = useTranslation();
+
+  const pendingMilestoneReviews = useMemo(() => {
+    return (stageCompletionRequests || []).filter(r => r.status === 'pending').length;
+  }, [stageCompletionRequests]);
+
+  const pendingMaterialRequests = useMemo(() => {
+    return (materialRequests || []).filter(r => r.status === 'pending').length;
+  }, [materialRequests]);
 
   useEffect(() => {
     // Force English language for i18n in Admin Portal
@@ -128,11 +136,10 @@ const AdminDashboard = () => {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all duration-200 text-sm group ${
-                  isActive
+                className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all duration-200 text-sm group ${isActive
                     ? 'bg-gradient-to-r from-amber-500/20 via-amber-500/10 to-transparent text-amber-300 font-bold border border-amber-500/30 shadow-sm'
                     : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 font-medium hover:translate-x-0.5'
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <span className={`transition-colors ${isActive ? 'text-amber-400' : 'text-zinc-400 group-hover:text-zinc-200'}`}>
@@ -140,9 +147,21 @@ const AdminDashboard = () => {
                   </span>
                   <span>{item.label}</span>
                 </div>
-                {isActive && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_hsl(38_78%_50%)]" />
-                )}
+                <div className="flex items-center gap-1.5">
+                  {item.id === 'sites' && pendingMilestoneReviews > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500 text-white animate-pulse shadow-xs">
+                      {pendingMilestoneReviews}
+                    </span>
+                  )}
+                  {item.id === 'materials' && pendingMaterialRequests > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white animate-pulse shadow-xs">
+                      {pendingMaterialRequests}
+                    </span>
+                  )}
+                  {isActive && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_hsl(38_78%_50%)]" />
+                  )}
+                </div>
               </button>
             );
           })}
@@ -175,7 +194,7 @@ const AdminDashboard = () => {
 
       {/* ── Main Content Area ── */}
       <div className="flex-1 md:ml-72 flex flex-col min-w-0 h-[100dvh] overflow-y-auto pb-20 md:pb-0">
-        <div className="page-container flex-1 py-6 px-4 md:px-8">
+        <div className="page-container flex-1">
           {/* Mobile Header (Hidden on Desktop) */}
           <div className="flex md:hidden items-center justify-between mb-5 p-3 rounded-2xl bg-[#121110] text-zinc-100 border border-amber-950/40 shadow-lg animate-slide-up">
             <div className="flex items-center gap-3">
@@ -247,14 +266,19 @@ const AdminDashboard = () => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all shrink-0 ${
-                    isActive
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all shrink-0 ${isActive
                       ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-bold'
                       : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
+                    }`}
                 >
                   {item.icon}
                   <span>{item.label}</span>
+                  {item.id === 'sites' && pendingMilestoneReviews > 0 && (
+                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                  )}
+                  {item.id === 'materials' && pendingMaterialRequests > 0 && (
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  )}
                 </button>
               );
             })}

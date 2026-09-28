@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
   Send, MapPin, Users, Package, Clock, Plus, Trash2,
-  Bike, Bus, Car, Footprints, AlertCircle, Search, Sparkles
+  Bike, Bus, Car, Footprints, AlertCircle, Search, Sparkles,
+  Layers, CheckCircle2, SendHorizonal, Lock, Unlock, ShieldCheck, ArrowRight
 } from 'lucide-react';
 import { Material, TransportMode, TRANSPORT_RATES, Site, Staff } from '@/types';
 
@@ -27,18 +29,8 @@ export const WorkEntryTab = ({
   onNavigateToMaterialRequest,
   onNavigateToAttendance
 }: WorkEntryTabProps) => {
-  const { addDailyLog, staffList, attendances } = useApp();
+  const { addDailyLog, dailyLogs, staffList, attendances, sites, paymentStageMaster, stageCompletionRequests, addStageCompletionRequest, updateSite } = useApp();
   const todayStr = format(new Date(), 'yyyy-MM-dd');
-
-  const [siteId, setSiteId] = useState('');
-  const [siteSearch, setSiteSearch] = useState('');
-  const [customSiteMode, setCustomSiteMode] = useState(false);
-  const [customSiteName, setCustomSiteName] = useState('');
-  const [visitReason, setVisitReason] = useState('');
-  const [hoursWorked, setHoursWorked] = useState('8');
-  const [workDesc, setWorkDesc] = useState('');
-  const [income, setIncome] = useState('');
-  const [workerCounts, setWorkerCounts] = useState({ painter: 0, plumber: 0, labour: 0 });
 
   // Attendances for today
   const todayAttendances = (attendances || []).filter(a => a.date === todayStr);
@@ -47,6 +39,42 @@ export const WorkEntryTab = ({
   const myAtt = todayAttendances.find(a => a.staffId === staff?.id);
   const isSelfPresent = myAtt?.status === 'present' || myAtt?.status === 'half-day';
   const availableCrew = myAtt?.presentCounts || { painter: 0, plumber: 0, labour: 0 };
+
+  const defaultSiteId = useMemo(() => {
+    return myAtt?.siteId || localStorage.getItem('today_active_site_id') || (mySites.length > 0 ? mySites[0].id : '');
+  }, [myAtt?.siteId, mySites]);
+
+  const [siteId, setSiteId] = useState(defaultSiteId);
+  const [siteSearch, setSiteSearch] = useState('');
+  const [customSiteMode, setCustomSiteMode] = useState(false);
+  const [customSiteName, setCustomSiteName] = useState('');
+  const [visitReason, setVisitReason] = useState('');
+  const [hoursWorked, setHoursWorked] = useState('8');
+  const [workDesc, setWorkDesc] = useState('');
+  const [income, setIncome] = useState('');
+  const [workerCounts, setWorkerCounts] = useState({ painter: 0, plumber: 0, labour: 0 });
+  const [selectedWorkLevel, setSelectedWorkLevel] = useState('');
+  const [completionNote, setCompletionNote] = useState('');
+  const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
+
+  // Auto-sync defaultSiteId if siteId is empty
+  useEffect(() => {
+    if (!siteId && defaultSiteId) {
+      setSiteId(defaultSiteId);
+    }
+  }, [defaultSiteId, siteId]);
+
+  // Auto-fill worker counts when siteId changes
+  useEffect(() => {
+    if (siteId && myAtt) {
+      const assignment = myAtt.siteAssignments?.find(sa => sa.siteId === siteId);
+      if (assignment) {
+        setWorkerCounts(assignment.counts);
+      } else if (availableCrew && (availableCrew.painter > 0 || availableCrew.plumber > 0 || availableCrew.labour > 0)) {
+        setWorkerCounts(availableCrew);
+      }
+    }
+  }, [siteId, myAtt, availableCrew]);
 
   // Transport
   const [transportMode, setTransportMode] = useState<TransportMode>('bike');
@@ -68,6 +96,89 @@ export const WorkEntryTab = ({
 
   const removeExpense = (i: number) => setExpenses(prev => prev.filter((_, idx) => idx !== i));
 
+  // Selected site object
+  const selectedSite = useMemo(() => sites.find(s => s.id === siteId), [sites, siteId]);
+
+  // Sequential stages calculation with strict sequential progression
+  const siteStages = useMemo(() => {
+    if (!selectedSite || customSiteMode) return [];
+
+    // Master list of stages for this site
+    const masterStages = paymentStageMaster.length > 0
+      ? paymentStageMaster
+      : (selectedSite.paymentStages || []).map(s => s.stageName);
+
+    let previousStagesAllCompleted = true;
+
+    return masterStages.map((stageName, idx) => {
+      const stageData = (selectedSite.paymentStages || []).find(s => s.stageName === stageName);
+      const pendingRequest = (stageCompletionRequests || []).find(
+        r => r.siteId === siteId && r.stageName === stageName && r.status === 'pending'
+      );
+      const isCompleted = stageData?.completionStatus === 'completed';
+      const isUnlocked = idx === 0 || previousStagesAllCompleted;
+      const isLocked = !isUnlocked;
+      const isApprovalPending = stageData?.completionStatus === 'completion_requested' || !!pendingRequest;
+      const isInProgress = stageData?.completionStatus === 'in_progress';
+      const isCurrentActive = isUnlocked && !isCompleted;
+
+      const prerequisiteStageName = idx > 0 ? masterStages[idx - 1] : undefined;
+
+      // If this stage is not completed, then all subsequent stages MUST be locked
+      if (!isCompleted) {
+        previousStagesAllCompleted = false;
+      }
+
+      return {
+        stageName,
+        idx,
+        levelNumber: idx + 1,
+        completionStatus: stageData?.completionStatus || 'pending',
+        isCompleted,
+        isUnlocked,
+        isLocked,
+        isCurrentActive,
+        isApprovalPending,
+        isInProgress,
+        hasPendingRequest: !!pendingRequest,
+        prerequisiteStageName,
+      };
+    });
+  }, [selectedSite, paymentStageMaster, siteId, stageCompletionRequests, customSiteMode]);
+
+  // Current active stage (the first uncompleted stage in sequential order)
+  const currentActiveStage = useMemo(() => {
+    return siteStages.find(s => s.isCurrentActive);
+  }, [siteStages]);
+
+  const allStagesCompleted = useMemo(() => {
+    return siteStages.length > 0 && siteStages.every(s => s.isCompleted);
+  }, [siteStages]);
+
+  // Active stage statistics for completion modal
+  const activeStageStats = useMemo(() => {
+    if (!siteId || !currentActiveStage) return { daysWorked: 0, totalExpenses: 0 };
+    const logs = (dailyLogs || []).filter(l => l.siteId === siteId && l.workLevelStage === currentActiveStage.stageName);
+    const daysWorked = new Set(logs.map(l => l.date)).size;
+    const totalExpenses = logs.reduce((sum, l) => {
+      const misc = (l.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+      const transport = l.transportCost || 0;
+      return sum + misc + transport;
+    }, 0);
+    return { daysWorked, totalExpenses };
+  }, [dailyLogs, siteId, currentActiveStage]);
+
+  // Auto-sync selectedWorkLevel to the current active unlocked stage whenever siteId or stages change
+  useEffect(() => {
+    if (siteId && !customSiteMode && siteStages.length > 0) {
+      if (currentActiveStage) {
+        setSelectedWorkLevel(currentActiveStage.stageName);
+      } else if (allStagesCompleted) {
+        setSelectedWorkLevel('');
+      }
+    }
+  }, [siteId, siteStages, customSiteMode, currentActiveStage, allStagesCompleted]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const finalSiteName = customSiteMode
@@ -83,6 +194,10 @@ export const WorkEntryTab = ({
       return;
     }
     if (!workDesc.trim()) { toast.error('Enter work description'); return; }
+
+    const effectiveStage = !customSiteMode
+      ? (selectedWorkLevel || currentActiveStage?.stageName || (siteStages[0]?.stageName ?? ''))
+      : undefined;
 
     const transportCost = transportMode === 'car' && transportCustomCost
       ? Number(transportCustomCost)
@@ -109,30 +224,92 @@ export const WorkEntryTab = ({
         painter: Math.min(workerCounts.painter, availableCrew.painter),
         plumber: Math.min(workerCounts.plumber, availableCrew.plumber),
         labour: Math.min(workerCounts.labour, availableCrew.labour),
-      }
+      },
+      workLevelStage: effectiveStage,
     });
 
-    toast.success('Work entry submitted successfully!');
-    setSiteId(''); setCustomSiteMode(false); setCustomSiteName(''); setVisitReason('');
-    setWorkDesc(''); setIncome(''); setExpenses([]);
-    setWorkerCounts({ painter: 0, plumber: 0, labour: 0 }); setTransportCustomCost('');
+    // Auto-update stage completionStatus to 'in_progress' if still 'pending'
+    if (!customSiteMode && effectiveStage && siteId) {
+      const currentSite = sites.find(s => s.id === siteId);
+      if (currentSite) {
+        const stages = currentSite.paymentStages || [];
+        const stageData = stages.find(s => s.stageName === effectiveStage);
+        if (!stageData || !stageData.completionStatus || stageData.completionStatus === 'pending') {
+          const existingStages = [...stages];
+          const stageIdx = existingStages.findIndex(s => s.stageName === effectiveStage);
+          if (stageIdx >= 0) {
+            existingStages[stageIdx] = { ...existingStages[stageIdx], completionStatus: 'in_progress' };
+          } else {
+            existingStages.push({ stageName: effectiveStage, expectedAmount: 0, paidAmount: 0, payments: [], completionStatus: 'in_progress' });
+          }
+          updateSite(siteId, { paymentStages: existingStages });
+        }
+      }
+    }
+
+    toast.success(effectiveStage ? `Work log & expenses recorded for ${effectiveStage}!` : 'Work entry submitted successfully!');
+    setWorkDesc('');
+    setIncome('');
+    setExpenses([]);
+    setTransportCustomCost('');
     onSubmissionSuccess?.();
+  };
+
+  const handleRequestCompletion = () => {
+    const targetStage = currentActiveStage?.stageName || selectedWorkLevel;
+    if (!targetStage || !siteId) return;
+    const existing = (stageCompletionRequests || []).find(
+      r => r.siteId === siteId && r.stageName === targetStage && r.status === 'pending'
+    );
+    if (existing) {
+      toast.info('A completion request for this stage is already pending admin approval.');
+      return;
+    }
+    const site = sites.find(s => s.id === siteId);
+    addStageCompletionRequest({
+      siteId,
+      siteName: site?.name || '',
+      stageName: targetStage,
+      requestedByStaffId: staff?.id || '',
+      requestedByStaffName: staff?.name || '',
+      requestedAt: new Date().toISOString(),
+      notes: completionNote.trim() || undefined,
+      status: 'pending',
+    });
+    // Update stage status to 'completion_requested'
+    if (site) {
+      const existingStages = [...(site.paymentStages || [])];
+      const stageIdx = existingStages.findIndex(s => s.stageName === targetStage);
+      if (stageIdx >= 0) {
+        existingStages[stageIdx] = { ...existingStages[stageIdx], completionStatus: 'completion_requested' };
+      } else {
+        existingStages.push({ stageName: targetStage, expectedAmount: 0, paidAmount: 0, payments: [], completionStatus: 'completion_requested' });
+      }
+      updateSite(siteId, { paymentStages: existingStages });
+    }
+    toast.success(`Level "${targetStage}" completion request submitted to Admin!`);
+    setCompletionNote('');
+    setIsCompletionModalOpen(false);
   };
 
   const isSupervisor = staff?.role === 'supervisor';
   const otherStaff = staffList.filter(s => s.id !== staff?.id && s.role !== 'admin');
 
   return (
-    <div className="animate-slide-up-delay-2 max-w-3xl">
+    <div className="animate-slide-up-delay-2 w-full">
       <form onSubmit={handleSubmit}>
         <div className="form-card mb-5">
-          <div className="section-title flex items-center gap-2 text-base">
+          <div className="section-title flex items-center gap-2 text-base pb-3 border-b border-border/40">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
               style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}>
               <Send className="w-4 h-4 text-white" />
             </div>
             Daily Work Entry
           </div>
+
+          <div className="space-y-6 pt-1">
+            {/* Left Column (now top): Site Selection, Milestone & Description */}
+            <div className="space-y-4">
 
           {/* Site selection */}
           <div>
@@ -260,6 +437,80 @@ export const WorkEntryTab = ({
             </div>
           )}
 
+          {/* ── Active Construction Milestone Banner ── */}
+          {siteId && !customSiteMode && siteStages.length > 0 && (
+            <div className="animate-slide-up">
+              {allStagesCompleted ? (
+                <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center gap-3 text-xs text-emerald-700 dark:text-emerald-400 font-semibold shadow-xs">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-600 shrink-0">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-sm">All Project Milestones Completed! 🎉</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      All construction stages for this site have been verified and marked completed by Admin.
+                    </p>
+                  </div>
+                </div>
+              ) : currentActiveStage ? (
+                <div className="p-4 rounded-2xl border border-primary/30 bg-gradient-to-r from-primary/[0.08] via-card to-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+                      L{currentActiveStage.levelNumber}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
+                          Active Construction Milestone • Level {currentActiveStage.levelNumber} of {siteStages.length}
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${currentActiveStage.isApprovalPending
+                            ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30 animate-pulse'
+                            : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                          }`}>
+                          {currentActiveStage.isApprovalPending ? '⏳ Approval Pending' : '⚡ In Progress'}
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-bold text-foreground truncate mt-0.5">
+                        {currentActiveStage.stageName}
+                      </h3>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                        Work descriptions, materials, and expenses logged today will be tracked under this level.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Milestone Completion Action */}
+                  <div className="shrink-0 self-start sm:self-auto">
+                    {currentActiveStage.isApprovalPending ? (
+                      <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-700 dark:text-blue-400 text-xs font-bold">
+                        <Clock className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                        <span>Completion Pending Admin Review</span>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsCompletionModalOpen(true)}
+                        className="h-9 rounded-xl text-xs font-bold gap-1.5 bg-primary/10 text-primary hover:bg-primary/20 border-primary/30 shadow-xs transition-all"
+                      >
+                        <SendHorizonal className="w-3.5 h-3.5" /> Request Level {currentActiveStage.levelNumber} Completion
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {/* No stages warning when site selected but no stages defined */}
+          {siteId && !customSiteMode && siteStages.length === 0 && paymentStageMaster.length === 0 && (
+            <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs text-amber-700 dark:text-amber-400 animate-slide-up">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>No work levels have been set up by Admin yet. Please contact Admin to define Payment Stages in Settings.</span>
+            </div>
+          )}
+
           {/* Work Description */}
           <div>
             <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1.5">
@@ -269,14 +520,17 @@ export const WorkEntryTab = ({
               placeholder="Describe work completed today, milestones, issues encountered..."
               value={workDesc}
               onChange={e => setWorkDesc(e.target.value)}
-              rows={3}
+              rows={4}
               className="rounded-xl text-sm"
               required
             />
           </div>
+        </div>
 
+        {/* Right Column (now bottom): Crew, Materials, Expenses, Income & Submission */}
+        <div className="space-y-4">
           {/* Crew Members Included (Based on Attendance) */}
-          <div className="space-y-3 pt-3 border-t border-border/40">
+          <div className="space-y-3">
             <div>
               <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                 <Users className="w-3.5 h-3.5 text-primary" /> Crew Members Present at this Site
@@ -333,7 +587,7 @@ export const WorkEntryTab = ({
                 );
               })}
             </div>
-            
+
             {Object.values(workerCounts).reduce((a, b) => a + b, 0) > 0 && (
               <p className="text-[11px] text-primary font-medium pt-1">
                 ✓ {Object.values(workerCounts).reduce((a, b) => a + b, 0)} crew members assigned to this site
@@ -359,7 +613,7 @@ export const WorkEntryTab = ({
             </div>
           </div>
 
-          
+
           {/* Extra Expenses */}
           <div>
             <Label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Additional Daily Expenses</Label>
@@ -441,8 +695,75 @@ export const WorkEntryTab = ({
           >
             Submit Daily Work Entry
           </Button>
+            </div>
+          </div>
         </div>
       </form>
+
+      {/* Level Completion Request Modal */}
+      <Dialog open={isCompletionModalOpen} onOpenChange={setIsCompletionModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6">
+          <DialogHeader>
+            <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center mb-2">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <DialogTitle className="text-base font-bold font-heading">
+              Request Completion Approval for Level {currentActiveStage?.levelNumber}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              {currentActiveStage?.stageName} • {selectedSite?.name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Milestone Summary Stats */}
+            <div className="grid grid-cols-2 gap-2.5 p-3 rounded-xl bg-muted/40 border border-border/50 text-xs">
+              <div>
+                <span className="text-[10px] text-muted-foreground uppercase font-bold">Days Logged on Level</span>
+                <p className="font-bold text-foreground text-sm">{activeStageStats.daysWorked} Days</p>
+              </div>
+              <div>
+                <span className="text-[10px] text-muted-foreground uppercase font-bold">Total Expenses Logged</span>
+                <p className="font-bold text-foreground text-sm">₹{activeStageStats.totalExpenses.toLocaleString()}</p>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-foreground">
+                Supervisor Inspection & Completion Note *
+              </Label>
+              <Textarea
+                placeholder="e.g. All foundation columns cured for 14 days, structural checks completed, ready for backfilling and ground floor slab work..."
+                value={completionNote}
+                onChange={e => setCompletionNote(e.target.value)}
+                rows={3}
+                className="text-xs rounded-xl"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Admin will review your work history and approve this milestone. Once approved, Level {Number(currentActiveStage?.levelNumber || 0) + 1} will unlock automatically.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setIsCompletionModalOpen(false)}
+              className="rounded-xl text-xs font-semibold"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleRequestCompletion}
+              className="rounded-xl text-xs font-bold gap-1.5 bg-primary text-white"
+            >
+              <SendHorizonal className="w-3.5 h-3.5" /> Submit to Admin
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

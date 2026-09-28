@@ -8,16 +8,20 @@ import { format } from 'date-fns';
 import {
   Building2, Users, UserCircle, FileText, Package, MapPin,
   TrendingUp, TrendingDown, IndianRupee, Clock, AlertCircle,
-  CalendarDays, CheckCircle2, ChevronRight, ArrowRight
+  CalendarDays, CheckCircle2, ChevronRight, ArrowRight, SendHorizonal
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 export const DashboardOverviewTab = () => {
-  const { sites, dailyLogs, staffList, invoices, customers, materialRequests } = useApp();
+  const { sites, dailyLogs, staffList, invoices, customers, materialRequests, stageCompletionRequests } = useApp();
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const { t } = useTranslation();
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+  const pendingStageApprovals = useMemo(() => {
+    return (stageCompletionRequests || []).filter(r => r.status === 'pending');
+  }, [stageCompletionRequests]);
 
   // Overdue Site Payment Milestones
   const overdueMilestones = useMemo(() => {
@@ -141,6 +145,27 @@ export const DashboardOverviewTab = () => {
             </div>
           </div>
           <span className="badge-gold text-[10px] px-2.5 py-1 font-bold shrink-0">{t('dashboard.actionRequired')}</span>
+        </div>
+      )}
+
+      {pendingStageApprovals.length > 0 && (
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-2xl p-3.5 flex items-center justify-between gap-3 animate-slide-up shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 font-bold">
+              <SendHorizonal className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                {pendingStageApprovals.length} Milestone Level Completion {pendingStageApprovals.length === 1 ? 'Request' : 'Requests'} Waiting for Approval!
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {pendingStageApprovals.map(r => `${r.requestedByStaffName} on ${r.siteName} (${r.stageName})`).join(' • ')}
+              </p>
+            </div>
+          </div>
+          <span className="bg-blue-600 text-white text-[10px] px-2.5 py-1 rounded-full font-bold shrink-0 animate-pulse">
+            Review in Sites Tab
+          </span>
         </div>
       )}
 
