@@ -443,9 +443,9 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                                 );
                               }
 
-                              const masterStages = paymentStageMaster.length > 0
-                                ? paymentStageMaster
-                                : (selectedSiteObj.paymentStages || []).map(st => st.stageName);
+                              const masterStages = (selectedSiteObj.paymentStages && selectedSiteObj.paymentStages.length > 0)
+                                ? selectedSiteObj.paymentStages.map(st => st.stageName)
+                                : paymentStageMaster;
 
                               let activeStageName = '';
                               let activeStageLevel = 1;

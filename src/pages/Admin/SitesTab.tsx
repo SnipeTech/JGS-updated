@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,7 +16,7 @@ import {
   Receipt, FileText, ChevronDown, ChevronUp, RefreshCw
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Material, MaterialRequest, MaterialRental } from '@/types';
+import { Material, MaterialRequest, MaterialRental, Site } from '@/types';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getSiteAvailableStock } from '@/lib/utils';
@@ -44,7 +44,19 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     stageCompletionRequests, updateStageCompletionRequest,
     manualExpenses
   } = useApp();
-  const site = sites.find(s => s.id === siteId);
+  const fallbackSite: Site = useMemo(() => ({
+    id: siteId,
+    name: 'Site Detail',
+    clientName: 'Field Visit',
+    address: '',
+    status: 'active',
+    budget: 0,
+    paymentStages: [],
+    assignedStaffIds: [],
+    supervisorId: '',
+    startDate: format(new Date(), 'yyyy-MM-dd'),
+  }), [siteId]);
+  const site = sites.find(s => s.id === siteId) || fallbackSite;
   const today = format(new Date(), 'yyyy-MM-dd');
 
   // Rentals for this site
@@ -169,14 +181,21 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
   const defaultFromDate = useMemo(() => {
     const dates = siteLogsAll.map(l => l.date).filter(Boolean);
-    if (site?.startDate) dates.push(site.startDate);
+    if (site?.startDate && site.startDate <= today) dates.push(site.startDate);
     if (dates.length === 0) return format(new Date(Date.now() - 60 * 86400000), 'yyyy-MM-dd');
     dates.sort();
-    return dates[0];
-  }, [siteLogsAll, site]);
+    const earliest = dates[0];
+    return earliest <= today ? earliest : format(new Date(Date.now() - 30 * 86400000), 'yyyy-MM-dd');
+  }, [siteLogsAll, site, today]);
 
   const [fromDate, setFromDate] = useState(defaultFromDate);
   const [toDate, setToDate] = useState(today);
+
+  // Synchronize date range whenever site changes or logs update
+  useEffect(() => {
+    setFromDate(defaultFromDate);
+    setToDate(today);
+  }, [siteId, defaultFromDate, today]);
 
   // Material Hub & Logistics states
   const [assignModal, setAssignModal] = useState<{ open: boolean; request: MaterialRequest | null }>({ open: false, request: null });
@@ -2817,8 +2836,9 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
 // ── Sites Tab Main Component ──────────────────────────────
 export const SitesTab = () => {
-  const { sites, addSite, customers, addCustomer, staffList, materialRequests, materialRentals, stageCompletionRequests } = useApp();
+  const { sites, addSite, customers, addCustomer, staffList, materialRequests, materialRentals, stageCompletionRequests, dailyLogs } = useApp();
   const { t } = useTranslation();
+  const today = format(new Date(), 'yyyy-MM-dd');
   const [name, setName] = useState('');
   const [addr, setAddr] = useState('');
   const [client, setClient] = useState('');
@@ -2826,6 +2846,8 @@ export const SitesTab = () => {
   const [clientEmail, setClientEmail] = useState('');
   const [clientAddress, setClientAddress] = useState('');
   const [budget, setBudget] = useState('');
+  const [totalLevels, setTotalLevels] = useState('5');
+  const [levelDetails, setLevelDetails] = useState<string[]>(Array(10).fill(''));
   const [start, setStart] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [supervisor, setSupervisor] = useState('none');
   const [show, setShow] = useState(false);
@@ -2862,6 +2884,18 @@ export const SitesTab = () => {
       finalClientName = selectedCust.name;
     }
 
+    const levelsCount = Number(totalLevels) || 1;
+    const initialStages = Array.from({ length: levelsCount }, (_, i) => {
+      const detail = levelDetails[i]?.trim();
+      return {
+        stageName: detail ? `Level ${i + 1}: ${detail}` : `Level ${i + 1}`,
+        expectedAmount: 0,
+        paidAmount: 0,
+        payments: [],
+        completionStatus: (i === 0 ? 'in_progress' : 'pending') as 'in_progress' | 'pending'
+      };
+    });
+
     addSite({
       name,
       address: addr,
@@ -2869,12 +2903,14 @@ export const SitesTab = () => {
       status: 'active',
       startDate: start,
       budget: Number(budget) || 0,
-      supervisorId: supervisor === 'none' ? undefined : supervisor
+      supervisorId: supervisor === 'none' ? undefined : supervisor,
+      totalLevels: levelsCount,
+      paymentStages: initialStages
     });
 
     toast.success('Site added!');
     setName(''); setAddr(''); setClient(''); setClientPhone(''); setClientEmail(''); setClientAddress('');
-    setBudget(''); setSupervisor('none'); setShow(false);
+    setBudget(''); setTotalLevels('5'); setLevelDetails(Array(10).fill('')); setSupervisor('none'); setShow(false);
   };
 
   return (
@@ -2967,6 +3003,18 @@ export const SitesTab = () => {
                 />
               </div>
               <div>
+                <Label className="text-xs font-semibold text-muted-foreground">Total Levels</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={totalLevels}
+                  onChange={e => {
+                    setTotalLevels(e.target.value);
+                  }}
+                  className="mt-1 h-10 rounded-xl text-xs font-semibold"
+                />
+              </div>
+              <div>
                 <Label className="text-xs font-semibold text-muted-foreground">Start Date</Label>
                 <Input
                   type="date"
@@ -2974,6 +3022,29 @@ export const SitesTab = () => {
                   onChange={e => setStart(e.target.value)}
                   className="mt-1 h-10 rounded-xl text-xs font-semibold"
                 />
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-border/50">
+              <Label className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2 block">
+                Level Breakdown (Work Details)
+              </Label>
+              <div className="space-y-2">
+                {Array.from({ length: Math.min(Number(totalLevels) || 1, 20) }).map((_, i) => (
+                  <div key={i} className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <Label className="text-xs font-semibold whitespace-nowrap w-16 text-muted-foreground">Level {i + 1}</Label>
+                    <Input
+                      placeholder="e.g. Foundation, Roofing, Plastering..."
+                      value={levelDetails[i] || ''}
+                      onChange={e => {
+                        const newDetails = [...levelDetails];
+                        newDetails[i] = e.target.value;
+                        setLevelDetails(newDetails);
+                      }}
+                      className="h-9 rounded-xl text-xs flex-1"
+                    />
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -2989,8 +3060,30 @@ export const SitesTab = () => {
       )}
 
       {/* Sites Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {sites.map(s => (
+      {(() => {
+        const siteIds = new Set(sites.map(s => s.id));
+        const allSites = [...sites];
+        (dailyLogs || []).forEach(log => {
+          if (log.siteId && !siteIds.has(log.siteId)) {
+            siteIds.add(log.siteId);
+            allSites.push({
+              id: log.siteId,
+              name: log.siteName || 'Custom Site Visit',
+              clientName: 'Field Visit / External Log',
+              address: log.siteName || 'External Site',
+              status: 'active',
+              budget: 0,
+              paymentStages: [],
+              assignedStaffIds: log.staffId ? [log.staffId] : [],
+              supervisorId: log.staffId || '',
+              startDate: log.date || today,
+            });
+          }
+        });
+
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {allSites.map(s => (
           <Card
             key={s.id}
             onClick={() => setSelectedSiteId(s.id)}
@@ -3055,6 +3148,8 @@ export const SitesTab = () => {
           </Card>
         ))}
       </div>
+    );
+  })()}
     </div>
   );
 };

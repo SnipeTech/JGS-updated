@@ -325,11 +325,32 @@ export const ReportsTab = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">🌐 All Sites (Company Overall View)</SelectItem>
-                {sites.map(s => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name} ({s.clientName})
-                  </SelectItem>
-                ))}
+                {(() => {
+                  const siteIds = new Set(sites.map(s => s.id));
+                  const allSiteOptions = [...sites];
+                  (dailyLogs || []).forEach(log => {
+                    if (log.siteId && !siteIds.has(log.siteId)) {
+                      siteIds.add(log.siteId);
+                      allSiteOptions.push({
+                        id: log.siteId,
+                        name: log.siteName || 'Custom Site',
+                        clientName: 'Field Visit',
+                        address: '',
+                        status: 'active',
+                        budget: 0,
+                        paymentStages: [],
+                        assignedStaffIds: [],
+                        supervisorId: '',
+                        startDate: log.date || '',
+                      });
+                    }
+                  });
+                  return allSiteOptions.map(s => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.name} ({s.clientName})
+                    </SelectItem>
+                  ));
+                })()}
               </SelectContent>
             </Select>
           </div>

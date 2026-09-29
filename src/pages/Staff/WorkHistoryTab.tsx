@@ -14,7 +14,11 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
   const [searchTerm, setSearchTerm] = useState('');
 
   const myLogs = dailyLogs
-    .filter(l => l.staffId === (staff?.id || currentUser?.id))
+    .filter(l => {
+      if (staff?.id) return l.staffId === staff.id;
+      if (currentUser?.role === 'admin') return true;
+      return l.staffId === currentUser?.id;
+    })
     .sort((a, b) => b.date.localeCompare(a.date));
 
   const filteredLogs = myLogs.filter(log => {
@@ -64,9 +68,11 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
                     <MapPin className="w-3.5 h-3.5 text-primary" />
                     {log.siteName}
                   </p>
-                  <p className="text-xs text-muted-foreground capitalize">
-                    {log.transportMode || 'Transport'} · ₹{log.transportCost || 0}
-                  </p>
+                  {log.transportCost && log.transportCost > 0 ? (
+                    <p className="text-xs text-muted-foreground capitalize">
+                      {log.transportMode || 'Transport'} · ₹{log.transportCost}
+                    </p>
+                  ) : null}
                 </div>
                 <span className="text-[10px] text-muted-foreground font-mono bg-muted px-2.5 py-0.5 rounded-full font-bold">
                   {log.date}
@@ -105,7 +111,7 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
                 </div>
               )}
 
-              {((log.expenses && log.expenses.length > 0) || log.transportCost) && (
+              {((log.expenses && log.expenses.length > 0) || (log.transportCost && log.transportCost > 0)) && (
                 <div className="bg-muted/40 rounded-xl p-2.5 mt-2">
                   <p className="text-[9px] text-muted-foreground font-bold tracking-wider uppercase mb-1">Expenses</p>
                   {log.expenses?.map((e, i) => (
@@ -114,7 +120,7 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
                       <span className="font-semibold text-destructive">₹{e.amount}</span>
                     </div>
                   ))}
-                  {log.transportCost ? (
+                  {log.transportCost && log.transportCost > 0 ? (
                     <div className="flex justify-between text-xs py-0.5">
                       <span className="capitalize">{log.transportMode || 'Transport'}</span>
                       <span className="font-semibold text-destructive">₹{log.transportCost}</span>

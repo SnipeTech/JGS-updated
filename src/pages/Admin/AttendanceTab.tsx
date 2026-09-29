@@ -518,63 +518,88 @@ export const AttendanceTab = () => {
                 <div className="pt-3 border-t border-border/40 space-y-3">
                   {/* Live Work Tracking, Assigned Site, Level & Expenses */}
                   {(() => {
+                    const staffDailyLogs = (dailyLogs || []).filter(l => l.staffId === staff.id && l.date === date);
                     const assignedSite = sites.find(s => s.id === att?.siteId);
-                    const staffDailyLog = (dailyLogs || []).find(l => l.staffId === staff.id && l.date === date);
-                    const siteName = assignedSite?.name || staffDailyLog?.siteName;
-                    const stageName = staffDailyLog?.workLevelStage;
-                    const miscExpenses = (staffDailyLog?.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
-                    const transport = staffDailyLog?.transportCost || 0;
-                    const totalDayExpenses = miscExpenses + transport;
 
                     return (
-                      <div className="p-3 rounded-xl bg-muted/25 border border-border/40 space-y-2 text-xs">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1">
-                              <MapPin className="w-3 h-3 text-primary" /> Assigned Site:
-                            </span>
-                            {siteName ? (
-                              <span className="font-bold text-foreground bg-card px-2.5 py-0.5 rounded-lg border border-border/50">
-                                {siteName}
+                      <div className="space-y-2">
+                        {staffDailyLogs.length === 0 ? (
+                          <div className="p-3 rounded-xl bg-muted/25 border border-border/40 space-y-2 text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1">
+                                <MapPin className="w-3 h-3 text-primary" /> Assigned Site:
                               </span>
-                            ) : (
-                              <span className="text-muted-foreground italic">No site assigned yet</span>
-                            )}
-                            {stageName && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                                {stageName}
-                              </span>
-                            )}
+                              {assignedSite?.name ? (
+                                <span className="font-bold text-foreground bg-card px-2.5 py-0.5 rounded-lg border border-border/50">
+                                  {assignedSite.name}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground italic">No site assigned yet</span>
+                              )}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            {att?.isSubmitted ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 flex items-center gap-1">
-                                <CheckCircle2 className="w-3 h-3" /> Submitted by Staff
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-medium text-muted-foreground">
-                                Pending / In Progress
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                        ) : (
+                          staffDailyLogs.map((staffDailyLog, logIdx) => {
+                            const siteObj = sites.find(s => s.id === staffDailyLog.siteId);
+                            const siteName = siteObj?.name || staffDailyLog.siteName || assignedSite?.name;
+                            const stageName = staffDailyLog.workLevelStage;
+                            const miscExpenses = (staffDailyLog.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+                            const transport = staffDailyLog.transportCost || 0;
+                            const totalDayExpenses = miscExpenses + transport;
 
-                        {staffDailyLog?.notes && (
-                          <div className="bg-card p-2 rounded-lg border border-border/40 text-[11px] text-muted-foreground whitespace-pre-line">
-                            <span className="font-semibold text-foreground mr-1">Work Description:</span>
-                            {staffDailyLog.notes}
-                          </div>
-                        )}
+                            return (
+                              <div key={staffDailyLog.id || logIdx} className="p-3 rounded-xl bg-muted/25 border border-border/40 space-y-2 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1">
+                                      <MapPin className="w-3 h-3 text-primary" /> Site #{logIdx + 1}:
+                                    </span>
+                                    {siteName ? (
+                                      <span className="font-bold text-foreground bg-card px-2.5 py-0.5 rounded-lg border border-border/50">
+                                        {siteName}
+                                      </span>
+                                    ) : (
+                                      <span className="text-muted-foreground italic">Unlisted Site</span>
+                                    )}
+                                    {stageName && (
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                                        {stageName}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {att?.isSubmitted ? (
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 flex items-center gap-1">
+                                        <CheckCircle2 className="w-3 h-3" /> Submitted by Staff
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-medium text-muted-foreground">
+                                        Pending / In Progress
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
 
-                        {totalDayExpenses > 0 && (
-                          <div className="flex items-center justify-between text-[11px] pt-1 border-t border-border/30">
-                            <span className="text-muted-foreground flex items-center gap-1">
-                              <Receipt className="w-3 h-3 text-amber-500" /> Day Incidental & Travel Expenses:
-                            </span>
-                            <span className="font-bold text-amber-600 dark:text-amber-400">
-                              ₹{totalDayExpenses.toLocaleString()}
-                            </span>
-                          </div>
+                                {staffDailyLog.notes && (
+                                  <div className="bg-card p-2 rounded-lg border border-border/40 text-[11px] text-muted-foreground whitespace-pre-line">
+                                    <span className="font-semibold text-foreground mr-1">Work Description:</span>
+                                    {staffDailyLog.notes}
+                                  </div>
+                                )}
+
+                                {totalDayExpenses > 0 && (
+                                  <div className="flex items-center justify-between text-[11px] pt-1 border-t border-border/30">
+                                    <span className="text-muted-foreground flex items-center gap-1">
+                                      <Receipt className="w-3 h-3 text-amber-500" /> Day Incidental & Travel Expenses:
+                                    </span>
+                                    <span className="font-bold text-amber-600 dark:text-amber-400">
+                                      ₹{totalDayExpenses.toLocaleString()}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
                         )}
                       </div>
                     );

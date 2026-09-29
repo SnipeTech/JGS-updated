@@ -22,7 +22,7 @@ interface MaterialRequestTabProps {
 }
 
 export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRequestTabProps) => {
-  const { sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest, paymentStageMaster } = useApp();
+  const { sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest, paymentStageMaster, unitMaster } = useApp();
 
   const [reqSiteId, setReqSiteId] = useState(initialSiteId || localStorage.getItem('today_active_site_id') || '');
   const [reqSourceType, setReqSourceType] = useState<'supplier' | 'site'>('supplier');
@@ -167,7 +167,9 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
     }
 
     // Automatically link requisition to the active construction level/stage for the destination site
-    const masterStages = paymentStageMaster.length > 0 ? paymentStageMaster : (targetSite.paymentStages || []).map(s => s.stageName);
+    const masterStages = (targetSite.paymentStages && targetSite.paymentStages.length > 0)
+      ? targetSite.paymentStages.map(s => s.stageName)
+      : paymentStageMaster;
     let activeStageForReq: string | undefined = undefined;
     for (const st of masterStages) {
       const sData = (targetSite.paymentStages || []).find(s => s.stageName === st);
@@ -472,15 +474,10 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                             <SelectTrigger className="h-10 rounded-xl text-xs">
                               <SelectValue placeholder="Unit" />
                             </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Bags">Bags</SelectItem>
-                              <SelectItem value="Tons">Tons</SelectItem>
-                              <SelectItem value="Sqft">Sqft</SelectItem>
-                              <SelectItem value="Kg">Kg</SelectItem>
-                              <SelectItem value="Liters">Liters</SelectItem>
-                              <SelectItem value="Nos">Nos</SelectItem>
-                              <SelectItem value="Bundles">Bundles</SelectItem>
-                              <SelectItem value="Units">Units</SelectItem>
+                            <SelectContent className="max-h-60">
+                              {(unitMaster && unitMaster.length > 0 ? unitMaster : ['Bags', 'Tons', 'Sqft', 'Kg', 'Liters', 'Nos', 'Bundles', 'Units']).map(u => (
+                                <SelectItem key={u} value={u}>{u}</SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         )}

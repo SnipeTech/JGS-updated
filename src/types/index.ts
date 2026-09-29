@@ -63,6 +63,7 @@ export interface Site {
   supervisorId?: string;
   assignedStaffIds?: string[];
   paymentStages?: SitePaymentStage[];
+  totalLevels?: number;
 }
 
 export interface Customer {
@@ -151,10 +152,10 @@ export type TransportMode = 'bike' | 'auto' | 'bus' | 'car' | 'walk';
 
 export const TRANSPORT_RATES: Record<TransportMode, number> = {
   walk: 0,
-  bike: 5,
-  bus: 15,
-  auto: 50,
-  car: 100,
+  bike: 0,
+  bus: 0,
+  auto: 0,
+  car: 0,
 };
 
 export interface Material {
@@ -384,6 +385,7 @@ export interface AppState {
   materialRequests: MaterialRequest[];
   labourTypes: string[];
   paymentStageMaster: string[];
+  unitMaster: string[];
   materialRentals: MaterialRental[];
   stageCompletionRequests: StageCompletionRequest[];
   currentUser: { id: string; role: 'admin' | 'staff'; adminPermissions?: string[] } | null;

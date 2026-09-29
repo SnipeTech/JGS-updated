@@ -71,6 +71,10 @@ interface AppContextType extends AppState {
   removeLabourType: (type: string) => void;
   addPaymentStageMaster: (stage: string) => void;
   removePaymentStageMaster: (stage: string) => void;
+  // Units Master
+  unitMaster: string[];
+  addUnit: (unit: string) => void;
+  removeUnit: (unit: string) => void;
   // Stage Completion Requests
   stageCompletionRequests: StageCompletionRequest[];
   addStageCompletionRequest: (request: Omit<StageCompletionRequest, 'id'>) => void;
@@ -80,6 +84,8 @@ interface AppContextType extends AppState {
 }
 
 const ADMIN = { id: 'admin', name: 'JGS', phone: '0000000000', role: 'admin', password: 'jgsconstruction*$' };
+
+export const DEFAULT_UNITS = ['Kg', 'Tons', 'Bags', 'Liters', 'Nos', 'Sets', 'Sq.Ft', 'Boxes', 'Meters', 'Loads', 'Units'];
 
 const defaultState: AppState = {
   staffList: [],
@@ -98,12 +104,34 @@ const defaultState: AppState = {
   materialRequests: [],
   labourTypes: ['painter', 'plumber', 'electrician', 'labour'],
   paymentStageMaster: ['Level 1: Foundation', 'Level 2: Ground Floor Slab', 'Level 3: Plastering', 'Level 4: Finishing & Handover'],
+  unitMaster: DEFAULT_UNITS,
   materialRentals: [],
   stageCompletionRequests: [],
   currentUser: null,
 };
 
+function sanitizeDailyLogs(logs: any[]): any[] {
+  if (!Array.isArray(logs)) return [];
+  return logs.map(l => {
+    const cleanedExpenses = (l.expenses || []).filter((e: any) => !(e.itemName?.toLowerCase() === 'bike' && e.amount === 5));
+    const isLegacyBikeCost = (l.transportCost === 5 && (l.transportMode === 'bike' || !l.transportMode));
+    const cleanedTransportCost = isLegacyBikeCost ? 0 : (l.transportCost || 0);
+    return {
+      ...l,
+      expenses: cleanedExpenses,
+      transportCost: cleanedTransportCost,
+      transportMode: cleanedTransportCost > 0 ? l.transportMode : undefined,
+    };
+  });
+}
+
 function loadState(): AppState {
+  let savedUser: any = null;
+  try {
+    const userStr = localStorage.getItem('edamari_current_user');
+    if (userStr) savedUser = JSON.parse(userStr);
+  } catch {}
+
   try {
     const saved = localStorage.getItem('edamari_data');
     if (saved) {
@@ -116,23 +144,35 @@ function loadState(): AppState {
         localStorage.removeItem('edamari_data');
         localStorage.removeItem('edamari_payroll_paid');
         localStorage.removeItem('edamari_payroll_history');
-        return defaultState;
+        return { ...defaultState, currentUser: savedUser };
       }
+      
       return {
         ...defaultState,
         ...parsed,
-        currentUser: null,
+        dailyLogs: sanitizeDailyLogs(parsed.dailyLogs || []),
+        unitMaster: parsed.unitMaster && parsed.unitMaster.length > 0 ? parsed.unitMaster : DEFAULT_UNITS,
+        currentUser: savedUser,
       };
     }
   } catch { }
-  return defaultState;
+  return { ...defaultState, currentUser: savedUser };
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(loadState);
-  const [currentPortal, setCurrentPortal] = useState<'admin' | 'staff'>('admin');
+  const [currentPortal, setCurrentPortal] = useState<'admin' | 'staff'>(() => {
+    try {
+      const userStr = localStorage.getItem('edamari_current_user');
+      if (userStr) {
+        const u = JSON.parse(userStr);
+        return u.role === 'staff' ? 'staff' : 'admin';
+      }
+    } catch {}
+    return 'admin';
+  });
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
   const [isInitialLoadDone, setIsInitialLoadDone] = useState<boolean>(false);
   const switchPortal = (portal: 'admin' | 'staff') => setCurrentPortal(portal);
@@ -147,10 +187,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (isMounted) setIsBackendConnected(true);
           const backendState = await api.fetchAppState();
           if (isMounted && backendState) {
+            let activeUser: any = null;
+            try {
+              const uStr = localStorage.getItem('edamari_current_user');
+              if (uStr) activeUser = JSON.parse(uStr);
+            } catch {}
             setState(prev => ({
               ...prev,
               ...backendState,
-              currentUser: prev.currentUser,
+              dailyLogs: sanitizeDailyLogs(backendState.dailyLogs || prev.dailyLogs || []),
+              unitMaster: backendState.unitMaster && backendState.unitMaster.length > 0 ? backendState.unitMaster : (prev.unitMaster || DEFAULT_UNITS),
+              currentUser: activeUser || prev.currentUser,
             }));
           }
         }
@@ -167,8 +214,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // 2. Persist to Backend & localStorage on any state changes
   useEffect(() => {
     if (!isInitialLoadDone) return;
+    localStorage.setItem('edamari_data', JSON.stringify(state));
     const { currentUser, ...dataToSync } = state;
-    localStorage.setItem('edamari_data', JSON.stringify(dataToSync));
 
     const timeout = setTimeout(() => {
       api.syncAppState(dataToSync)
@@ -185,8 +232,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state.products, state.quotations, state.manualExpenses, state.vendors,
     state.workEntries, state.attendances, state.materialSettings,
     state.suppliers, state.vehicles, state.materialRequests,
-    state.labourTypes, state.paymentStageMaster, state.materialRentals,
-    state.stageCompletionRequests, isInitialLoadDone
+    state.labourTypes, state.paymentStageMaster, state.unitMaster, state.materialRentals,
+    state.stageCompletionRequests, state.currentUser, isInitialLoadDone
   ]);
 
   const clearAllData = async () => {
@@ -253,7 +300,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const login = (id: string, password: string): boolean => {
     const input = id.trim().toLowerCase();
     if ((input === 'jgs' || input === 'admin') && (password === 'jgsconstruction*$' || password === 'admin123')) {
-      setState(s => ({ ...s, currentUser: { id: 'admin', role: 'admin', adminPermissions: [] } }));
+      const user = { id: 'admin', role: 'admin', adminPermissions: [] } as const;
+      localStorage.setItem('edamari_current_user', JSON.stringify(user));
+      setState(s => ({ ...s, currentUser: user }));
       setCurrentPortal('admin');
       return true;
     }
@@ -267,7 +316,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
     if (staff) {
       const userRole = staff.role === 'admin' ? 'admin' : 'staff';
-      setState(s => ({ ...s, currentUser: { id: staff.id, role: userRole, adminPermissions: staff.adminPermissions } }));
+      const user = { id: staff.id, role: userRole, adminPermissions: staff.adminPermissions };
+      localStorage.setItem('edamari_current_user', JSON.stringify(user));
+      setState(s => ({ ...s, currentUser: user }));
       setCurrentPortal(userRole === 'admin' ? 'admin' : 'staff');
       return true;
     }
@@ -275,6 +326,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    localStorage.removeItem('edamari_current_user');
     setState(s => ({ ...s, currentUser: null }));
     // Clear Google Translate cookie to prevent admin page from translating
     document.cookie = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
@@ -301,10 +353,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, sites: s.sites.map(x => x.id === id ? { ...x, ...updates } : x) }));
 
   const addDailyLog = (log: Omit<DailyLog, 'id'>) => {
-    setState(prev => ({
-      ...prev,
-      dailyLogs: [...prev.dailyLogs, { ...log, id: `log_${Date.now()}` }]
-    }));
+    setState(prev => {
+      let updatedSites = prev.sites;
+      if (log.siteId && !prev.sites.some(s => s.id === log.siteId)) {
+        const autoSite: Site = {
+          id: log.siteId,
+          name: log.siteName || 'Custom Site Visit',
+          clientName: 'Site Visit / Field Work',
+          address: log.siteName || 'External Site',
+          status: 'active',
+          budget: 0,
+          paymentStages: [
+            {
+              stageName: log.workLevelStage || 'General Site Work',
+              expectedAmount: 0,
+              paidAmount: 0,
+              payments: [],
+              completionStatus: 'in_progress',
+            }
+          ],
+          assignedStaffIds: log.staffId ? [log.staffId] : [],
+          supervisorId: log.staffId || '',
+          startDate: log.date || format(new Date(), 'yyyy-MM-dd'),
+        };
+        updatedSites = [...prev.sites, autoSite];
+      }
+
+      return {
+        ...prev,
+        sites: updatedSites,
+        dailyLogs: [...prev.dailyLogs, { ...log, id: `log_${Date.now()}` }]
+      };
+    });
   };
 
   const updateDailyLog = (id: string, updates: Partial<DailyLog>) => {
@@ -633,6 +713,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const addUnit = (unit: string) => {
+    const trimmed = unit.trim();
+    if (!trimmed) return;
+    setState(s => {
+      const list = s.unitMaster || DEFAULT_UNITS;
+      if (list.some(u => u.toLowerCase() === trimmed.toLowerCase())) return s;
+      return { ...s, unitMaster: [...list, trimmed] };
+    });
+  };
+
+  const removeUnit = (unit: string) => {
+    setState(s => ({
+      ...s,
+      unitMaster: (s.unitMaster || DEFAULT_UNITS).filter(u => u.toLowerCase() !== unit.toLowerCase())
+    }));
+  };
+
   const addStageCompletionRequest = (request: Omit<StageCompletionRequest, 'id'>) => {
     const newRequest: StageCompletionRequest = {
       ...request,
@@ -680,6 +777,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={{
       ...state,
+      unitMaster: state.unitMaster || DEFAULT_UNITS,
+      addUnit, removeUnit,
       login, logout,
       addStaff, deleteStaff, updateStaff,
       addSite, deleteSite, updateSite,

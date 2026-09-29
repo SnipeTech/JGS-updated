@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Package, Users, ShieldCheck, Plus, Trash2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Package, Users, ShieldCheck, Plus, Trash2, CheckCircle2, AlertCircle, Ruler, Tag } from 'lucide-react';
 import { TabId } from '../AdminDashboard';
 
 const ADMIN_TABS = [
@@ -26,10 +26,11 @@ export const SettingsTab = () => {
     materialSettings, addMaterialSetting, deleteMaterialSetting,
     labourTypes, addLabourType, removeLabourType,
     paymentStageMaster, addPaymentStageMaster, removePaymentStageMaster,
+    unitMaster, addUnit, removeUnit,
     staffList, updateStaff
   } = useApp();
 
-  const [activeSection, setActiveSection] = useState<'materials' | 'labour' | 'admins' | 'payment_stages'>('materials');
+  const [activeSection, setActiveSection] = useState<'materials' | 'labour' | 'units' | 'admins' | 'payment_stages'>('materials');
 
   // Material State
   const [matName, setMatName] = useState('');
@@ -41,6 +42,9 @@ export const SettingsTab = () => {
 
   // Labour State
   const [labourName, setLabourName] = useState('');
+
+  // Units State
+  const [newUnitName, setNewUnitName] = useState('');
 
   // Payment Stage State
   const [stageName, setStageName] = useState('');
@@ -74,6 +78,32 @@ export const SettingsTab = () => {
     setLabourName('');
   };
 
+  const handleAddUnit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newUnitName.trim();
+    if (!trimmed) return toast.error('Unit name is required');
+    if (unitMaster.some(u => u.toLowerCase() === trimmed.toLowerCase())) {
+      return toast.error(`Unit "${trimmed}" already exists`);
+    }
+    addUnit(trimmed);
+    toast.success(`Unit "${trimmed}" added to master list!`);
+    setNewUnitName('');
+  };
+
+  const handleRemoveUnit = (unitToRemove: string) => {
+    const isUsed = materialSettings.some(m => m.unit?.toLowerCase() === unitToRemove.toLowerCase());
+    if (isUsed) {
+      if (!confirm(`Warning: Some materials in your catalog are currently using the unit "${unitToRemove}". Are you sure you want to remove it?`)) {
+        return;
+      }
+    }
+    removeUnit(unitToRemove);
+    toast.success(`Unit "${unitToRemove}" removed`);
+    if (matUnit.toLowerCase() === unitToRemove.toLowerCase()) {
+      setMatUnit(unitMaster.find(u => u.toLowerCase() !== unitToRemove.toLowerCase()) || 'Kg');
+    }
+  };
+
   const handleAddPaymentStage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!stageName.trim()) return toast.error('Payment stage name required');
@@ -103,7 +133,7 @@ export const SettingsTab = () => {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="section-header !mb-1">Settings & Master Data</h3>
-          <p className="text-xs text-muted-foreground">Manage material catalog, labour types, and admin access control.</p>
+          <p className="text-xs text-muted-foreground">Manage material catalog, labour types, custom units, and admin access control.</p>
         </div>
       </div>
 
@@ -123,6 +153,14 @@ export const SettingsTab = () => {
           }`}
         >
           <Users className="w-3.5 h-3.5" /> Labour Types
+        </button>
+        <button
+          onClick={() => setActiveSection('units')}
+          className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
+            activeSection === 'units' ? 'bg-sky-600 text-white shadow-sm' : 'text-muted-foreground hover:bg-muted'
+          }`}
+        >
+          <Ruler className="w-3.5 h-3.5" /> Units Master
         </button>
         <button
           onClick={() => setActiveSection('admins')}
@@ -150,19 +188,24 @@ export const SettingsTab = () => {
                 <Label className="text-xs font-semibold">Material Name *</Label>
                 <Input value={matName} onChange={e => setMatName(e.target.value)} placeholder="e.g. Steel Scaffolding Set, Cement 50kg" className="mt-1 h-9 text-xs" />
               </div>
-              <div className="w-[120px]">
-                <Label className="text-xs font-semibold">Unit</Label>
+              <div className="w-[140px]">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold">Unit</Label>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('units')}
+                    className="text-[10px] font-semibold text-sky-600 hover:underline flex items-center gap-0.5"
+                    title="Manage / Add new units"
+                  >
+                    <Plus className="w-2.5 h-2.5" /> New Unit
+                  </button>
+                </div>
                 <Select value={matUnit} onValueChange={setMatUnit}>
                   <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Kg">Kg</SelectItem>
-                    <SelectItem value="Tons">Tons</SelectItem>
-                    <SelectItem value="Bags">Bags</SelectItem>
-                    <SelectItem value="Liters">Liters</SelectItem>
-                    <SelectItem value="Nos">Nos</SelectItem>
-                    <SelectItem value="Sets">Sets</SelectItem>
-                    <SelectItem value="Sq.Ft">Sq.Ft</SelectItem>
-                    <SelectItem value="Units">Units</SelectItem>
+                  <SelectContent className="max-h-60">
+                    {unitMaster.map(u => (
+                      <SelectItem key={u} value={u}>{u}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -289,6 +332,97 @@ export const SettingsTab = () => {
                 </Button>
               </div>
             ))}
+          </div>
+        </Card>
+      )}
+
+      {activeSection === 'units' && (
+        <Card className="p-4 rounded-2xl border-border/50 shadow-sm space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-border/40">
+            <div>
+              <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
+                <Ruler className="w-4 h-4 text-sky-600" /> Units of Measurement (UOM)
+              </h4>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Create and manage custom units used across Material Catalog, Site Requisitions, and Supplier Orders.
+              </p>
+            </div>
+            <span className="text-xs font-semibold px-2.5 py-1 bg-sky-500/10 text-sky-600 rounded-lg">
+              {unitMaster.length} Units Available
+            </span>
+          </div>
+
+          {/* Form to add unit */}
+          <form onSubmit={handleAddUnit} className="flex items-end gap-3 p-3 bg-muted/20 rounded-xl border border-border/40">
+            <div className="flex-1 max-w-sm">
+              <Label className="text-xs font-semibold">New Unit of Measurement *</Label>
+              <Input
+                value={newUnitName}
+                onChange={e => setNewUnitName(e.target.value)}
+                placeholder="e.g. Cft, Brass, Bundles, Rolls, Box, Piece, Meter, Sq.Mtr"
+                className="mt-1 h-9 text-xs"
+              />
+            </div>
+            <Button type="submit" className="h-9 gap-1 text-xs bg-sky-600 hover:bg-sky-700 text-white">
+              <Plus className="w-3.5 h-3.5" /> Add Unit
+            </Button>
+          </form>
+
+          {/* Quick Suggestions */}
+          <div className="space-y-1.5 pt-1">
+            <Label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+              Quick Suggestions (Click to Add):
+            </Label>
+            <div className="flex flex-wrap gap-1.5">
+              {['Cft', 'Brass', 'Bundles', 'Rolls', 'Boxes', 'Pieces', 'Meters', 'Sq.Mtr', 'Hours', 'Days', 'Trips', 'Load']
+                .filter(u => !unitMaster.some(existing => existing.toLowerCase() === u.toLowerCase()))
+                .map(sug => (
+                  <button
+                    key={sug}
+                    type="button"
+                    onClick={() => {
+                      addUnit(sug);
+                      toast.success(`Unit "${sug}" added!`);
+                    }}
+                    className="text-xs font-semibold px-2.5 py-1 rounded-lg border border-dashed border-sky-500/40 text-sky-600 hover:bg-sky-50 dark:hover:bg-sky-950/30 flex items-center gap-1 transition-colors"
+                  >
+                    <Plus className="w-3 h-3" /> {sug}
+                  </button>
+                ))}
+            </div>
+          </div>
+
+          {/* Unit Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 pt-2">
+            {unitMaster.map(unit => {
+              const usageCount = materialSettings.filter(m => m.unit?.toLowerCase() === unit.toLowerCase()).length;
+              return (
+                <div
+                  key={unit}
+                  className="flex items-center justify-between p-3 rounded-xl border border-border/60 bg-card hover:border-sky-500/40 hover:shadow-sm transition-all"
+                >
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-sky-500" />
+                      {unit}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground block">
+                      {usageCount} {usageCount === 1 ? 'material' : 'materials'} linked
+                    </span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleRemoveUnit(unit)}
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg"
+                    title={`Delete ${unit}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              );
+            })}
           </div>
         </Card>
       )}

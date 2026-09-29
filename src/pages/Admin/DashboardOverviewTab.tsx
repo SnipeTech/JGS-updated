@@ -224,9 +224,30 @@ export const DashboardOverviewTab = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sites.map(site => {
-              const logsForSite = todayLogs.filter(l => l.siteId === site.id);
-              const staffWorkedToday = logsForSite.length > 0;
+            {(() => {
+              const siteIds = new Set(sites.map(s => s.id));
+              const allSitesList = [...sites];
+              todayLogs.forEach(log => {
+                if (log.siteId && !siteIds.has(log.siteId)) {
+                  siteIds.add(log.siteId);
+                  allSitesList.push({
+                    id: log.siteId,
+                    name: log.siteName || 'Custom Site Visit',
+                    clientName: 'Field Visit / External Log',
+                    address: log.siteName || '',
+                    status: 'active',
+                    budget: 0,
+                    paymentStages: [],
+                    assignedStaffIds: log.staffId ? [log.staffId] : [],
+                    supervisorId: log.staffId || '',
+                    startDate: log.date || selectedDate,
+                  });
+                }
+              });
+
+              return allSitesList.map(site => {
+                const logsForSite = todayLogs.filter(l => l.siteId === site.id);
+                const staffWorkedToday = logsForSite.length > 0;
 
               let displayStatus: string;
               let badgeClass: string;
@@ -313,8 +334,9 @@ export const DashboardOverviewTab = () => {
                   )}
                 </Card>
               );
-            })}
-          </div>
+            });
+          })()}
+        </div>
         )}
       </div>
 
@@ -392,46 +414,83 @@ export const DashboardOverviewTab = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {todayLogs.map(log => (
-              <Card key={log.id} className="list-card space-y-2.5">
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-                      <UserCircle className="w-5 h-5 text-primary" />
-                    </div>
-                    <div>
-                      <p className="font-heading font-semibold text-sm">{log.staffName}</p>
-                      <p className="text-xs text-muted-foreground flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        {log.siteName}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="badge-neutral capitalize">{log.transportMode}</span>
-                </div>
-                {log.materials && log.materials.length > 0 && (
-                  <div className="bg-muted/40 rounded-xl p-2.5">
-                    {log.materials.map((m, i) => (
-                      <div key={i} className="flex justify-between text-xs py-0.5">
-                        <span>
-                          {m.name} × {m.quantity}
-                        </span>
-                        <span className="font-semibold">₹{m.cost * m.quantity}</span>
+            {todayLogs.map(log => {
+              const miscExp = (log.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+              const matCost = (log.materials || []).reduce((a, m) => a + m.cost * m.quantity, 0);
+              const totalLogExpense = (log.transportCost || 0) + miscExp + matCost;
+              const hasCrew = log.workerCounts && (Number(log.workerCounts.painter) > 0 || Number(log.workerCounts.plumber) > 0 || Number(log.workerCounts.labour) > 0);
+
+              return (
+                <Card key={log.id} className="list-card space-y-2.5">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                        <UserCircle className="w-5 h-5 text-primary" />
                       </div>
-                    ))}
+                      <div className="min-w-0">
+                        <p className="font-heading font-semibold text-sm truncate">{log.staffName}</p>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
+                          <MapPin className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{log.siteName}</span>
+                        </p>
+                      </div>
+                    </div>
+                    {log.workLevelStage && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 shrink-0">
+                        {log.workLevelStage}
+                      </span>
+                    )}
                   </div>
-                )}
-                <div className="flex justify-between text-xs pt-1.5 border-t border-border/50">
-                  <span className="text-destructive font-medium flex items-center gap-1">
-                    <TrendingDown className="w-3 h-3" />₹{log.transportCost || 0}
-                  </span>
-                  <span className="text-success font-medium flex items-center gap-1">
-                    <TrendingUp className="w-3 h-3" />₹{log.incomeFromClient || 0}
-                  </span>
-                </div>
-                {log.notes && <p className="text-xs text-muted-foreground italic">"{log.notes}"</p>}
-              </Card>
-            ))}
+
+                  {/* Worker counts / crew on site */}
+                  {hasCrew && (
+                    <div className="flex flex-wrap gap-1.5 text-[11px] p-2 rounded-xl bg-muted/40 border border-border/40">
+                      <span className="text-[10px] font-bold text-muted-foreground uppercase mr-1">Crew:</span>
+                      {Number(log.workerCounts?.painter) > 0 && <span className="font-semibold text-amber-700 dark:text-amber-300">🎨 {log.workerCounts.painter} Painters</span>}
+                      {Number(log.workerCounts?.plumber) > 0 && <span className="font-semibold text-sky-700 dark:text-sky-300">🔧 {log.workerCounts.plumber} Plumbers</span>}
+                      {Number(log.workerCounts?.labour) > 0 && <span className="font-semibold text-orange-700 dark:text-orange-300">🔨 {log.workerCounts.labour} Labourers</span>}
+                    </div>
+                  )}
+
+                  {/* Materials */}
+                  {log.materials && log.materials.length > 0 && (
+                    <div className="bg-muted/40 rounded-xl p-2.5 space-y-1">
+                      {log.materials.map((m, i) => (
+                        <div key={i} className="flex justify-between text-xs py-0.5">
+                          <span>{m.name} × {m.quantity}</span>
+                          <span className="font-semibold">₹{m.cost * m.quantity}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Itemized Expenses */}
+                  {log.expenses && log.expenses.length > 0 && (
+                    <div className="bg-rose-500/5 rounded-xl p-2 border border-rose-500/15 space-y-1">
+                      <span className="text-[10px] font-bold text-destructive uppercase tracking-wider block">
+                        Site Expenses:
+                      </span>
+                      {log.expenses.map((e, i) => (
+                        <div key={i} className="flex justify-between text-xs text-muted-foreground">
+                          <span className="truncate">{e.itemName}</span>
+                          <span className="font-semibold text-destructive font-mono">₹{e.amount}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex justify-between text-xs pt-1.5 border-t border-border/50">
+                    <span className="text-destructive font-medium flex items-center gap-1">
+                      <TrendingDown className="w-3 h-3" />₹{totalLogExpense.toLocaleString()}
+                    </span>
+                    <span className="text-success font-medium flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3" />₹{(log.incomeFromClient || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  {log.notes && <p className="text-xs text-muted-foreground italic whitespace-pre-line">"{log.notes}"</p>}
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>

@@ -29,8 +29,11 @@ export const MaterialsSuppliersTab = () => {
     vehicles, addVehicle, updateVehicle, deleteVehicle,
     materialRequests, assignMaterialRequest, completeMaterialRequest, deleteMaterialRequest,
     updateMaterialRequest, staffList, sites,
-    materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental
+    materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental,
+    unitMaster,
   } = useApp();
+
+  const activeUnits = unitMaster && unitMaster.length > 0 ? unitMaster : COMMON_UNITS;
 
   const driversList = useMemo(() => staffList.filter(s => s.role === 'driver'), [staffList]);
 
@@ -2412,7 +2415,7 @@ export const MaterialsSuppliersTab = () => {
                             <SelectValue placeholder="Unit" />
                           </SelectTrigger>
                           <SelectContent>
-                            {COMMON_UNITS.map(u => (
+                            {activeUnits.map(u => (
                               <SelectItem key={u} value={u}>
                                 {u}
                               </SelectItem>
@@ -2657,7 +2660,7 @@ export const MaterialsSuppliersTab = () => {
                     <SelectValue placeholder="Select Unit" />
                   </SelectTrigger>
                   <SelectContent>
-                    {COMMON_UNITS.map(u => (
+                    {activeUnits.map(u => (
                       <SelectItem key={u} value={u}>{u}</SelectItem>
                     ))}
                   </SelectContent>

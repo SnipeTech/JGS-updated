@@ -104,10 +104,14 @@ def sync_app_state(request):
 
         labour_types_cfg = AppConfig.objects.filter(key='labourTypes').first()
         payment_stages_cfg = AppConfig.objects.filter(key='paymentStageMaster').first()
+        units_cfg = AppConfig.objects.filter(key='unitMaster').first()
 
         labour_types = labour_types_cfg.value.get('items', []) if labour_types_cfg else ['painter', 'plumber', 'electrician', 'labour']
         payment_stage_master = payment_stages_cfg.value.get('items', []) if payment_stages_cfg else [
             'Level 1: Foundation', 'Level 2: Ground Floor Slab', 'Level 3: Plastering', 'Level 4: Finishing & Handover'
+        ]
+        unit_master = units_cfg.value.get('items', []) if units_cfg else [
+            'Kg', 'Tons', 'Bags', 'Liters', 'Nos', 'Sets', 'Sq.Ft', 'Boxes', 'Meters', 'Loads', 'Units'
         ]
 
         return Response({
@@ -129,6 +133,7 @@ def sync_app_state(request):
             "stageCompletionRequests": stage_completion_requests,
             "labourTypes": labour_types,
             "paymentStageMaster": payment_stage_master,
+            "unitMaster": unit_master,
             "payrollPaidStatus": payroll_paid_status,
             "payrollHistory": payroll_history,
         })
@@ -196,6 +201,8 @@ def sync_app_state(request):
                 AppConfig.objects.update_or_create(key='labourTypes', defaults={'value': {'items': data['labourTypes']}})
             if 'paymentStageMaster' in data and isinstance(data['paymentStageMaster'], list):
                 AppConfig.objects.update_or_create(key='paymentStageMaster', defaults={'value': {'items': data['paymentStageMaster']}})
+            if 'unitMaster' in data and isinstance(data['unitMaster'], list):
+                AppConfig.objects.update_or_create(key='unitMaster', defaults={'value': {'items': data['unitMaster']}})
 
         return Response({"message": "State synchronized successfully"}, status=status.HTTP_200_OK)
 

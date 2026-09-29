@@ -76,22 +76,39 @@ export const WorkEntryTab = ({
     }
   }, [siteId, myAtt, availableCrew]);
 
-  // Transport
-  const [transportMode, setTransportMode] = useState<TransportMode>('bike');
-  const [transportCustomCost, setTransportCustomCost] = useState('');
-
   // Additional expenses
   const [expenses, setExpenses] = useState<{ itemName: string; amount: number }[]>([]);
-  const [expenseMode, setExpenseMode] = useState<'bus' | 'auto' | 'bike_petrol' | 'food' | 'other'>('bus');
+  const [expenseMode, setExpenseMode] = useState<'food' | 'bike_petrol' | 'auto' | 'bus' | 'materials' | 'tools' | 'other'>('food');
+  const [expenseNote, setExpenseNote] = useState('');
   const [expenseCustom, setExpenseCustom] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
 
+  const EXPENSE_LABELS: Record<string, string> = {
+    food: 'Food & Tea for Crew',
+    bike_petrol: 'Bike Petrol / Fuel',
+    auto: 'Auto / Cab Fare',
+    bus: 'Bus / Train Fare',
+    materials: 'Local Materials / Hardware',
+    tools: 'Tool Hire / Purchase',
+    other: 'Other Misc Expense',
+  };
+
   const addExpense = () => {
-    const finalName = expenseMode === 'other' ? expenseCustom.trim() : expenseMode;
-    if (!finalName) { toast.error('Enter expense type/name'); return; }
-    if (!expenseAmount) { toast.error('Enter the amount'); return; }
+    const baseLabel = EXPENSE_LABELS[expenseMode] || expenseMode;
+    const detail = (expenseMode === 'other' ? expenseCustom : expenseNote).trim();
+    if (expenseMode === 'other' && !detail) {
+      toast.error('Please enter the description of the expense');
+      return;
+    }
+    if (!expenseAmount || Number(expenseAmount) <= 0) {
+      toast.error('Enter a valid expense amount');
+      return;
+    }
+    const finalName = detail ? `${baseLabel} - ${detail}` : baseLabel;
     setExpenses(prev => [...prev, { itemName: finalName, amount: Number(expenseAmount) || 0 }]);
-    setExpenseMode('bus'); setExpenseCustom(''); setExpenseAmount('');
+    setExpenseCustom('');
+    setExpenseNote('');
+    setExpenseAmount('');
   };
 
   const removeExpense = (i: number) => setExpenses(prev => prev.filter((_, idx) => idx !== i));
@@ -103,10 +120,10 @@ export const WorkEntryTab = ({
   const siteStages = useMemo(() => {
     if (!selectedSite || customSiteMode) return [];
 
-    // Master list of stages for this site
-    const masterStages = paymentStageMaster.length > 0
-      ? paymentStageMaster
-      : (selectedSite.paymentStages || []).map(s => s.stageName);
+    // Master list of stages for this site: ALWAYS prioritize site's custom levels
+    const masterStages = (selectedSite.paymentStages && selectedSite.paymentStages.length > 0)
+      ? selectedSite.paymentStages.map(s => s.stageName)
+      : paymentStageMaster;
 
     let previousStagesAllCompleted = true;
 
@@ -183,7 +200,7 @@ export const WorkEntryTab = ({
     e.preventDefault();
     const finalSiteName = customSiteMode
       ? customSiteName.trim()
-      : mySites.find(s => s.id === siteId)?.name || '';
+      : (sites.find(s => s.id === siteId)?.name || mySites.find(s => s.id === siteId)?.name || '');
 
     if (!finalSiteName) {
       toast.error(customSiteMode ? 'Enter the site/visit name' : 'Please select a site');
@@ -199,9 +216,7 @@ export const WorkEntryTab = ({
       ? (selectedWorkLevel || currentActiveStage?.stageName || (siteStages[0]?.stageName ?? ''))
       : undefined;
 
-    const transportCost = transportMode === 'car' && transportCustomCost
-      ? Number(transportCustomCost)
-      : TRANSPORT_RATES[transportMode];
+    const transportCost = 0;
 
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
@@ -212,8 +227,8 @@ export const WorkEntryTab = ({
       siteName: finalSiteName,
       date: todayStr,
       materials: [],
-      transportMode,
-      transportCost,
+      transportMode: undefined,
+      transportCost: 0,
       expenses,
       incomeFromClient: Number(income) || 0,
       notes: [
@@ -221,9 +236,9 @@ export const WorkEntryTab = ({
         workDesc.trim()
       ].filter(Boolean).join('\n'),
       workerCounts: {
-        painter: Math.min(workerCounts.painter, availableCrew.painter),
-        plumber: Math.min(workerCounts.plumber, availableCrew.plumber),
-        labour: Math.min(workerCounts.labour, availableCrew.labour),
+        painter: Number(workerCounts.painter) || 0,
+        plumber: Number(workerCounts.plumber) || 0,
+        labour: Number(workerCounts.labour) || 0,
       },
       workLevelStage: effectiveStage,
     });
@@ -251,7 +266,6 @@ export const WorkEntryTab = ({
     setWorkDesc('');
     setIncome('');
     setExpenses([]);
-    setTransportCustomCost('');
     onSubmissionSuccess?.();
   };
 
@@ -616,34 +630,41 @@ export const WorkEntryTab = ({
 
           {/* Extra Expenses */}
           <div>
-            <Label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Additional Daily Expenses</Label>
+            <div className="flex items-center justify-between mb-1.5">
+              <Label className="text-xs font-semibold text-muted-foreground block">Supervisor Daily Expenses</Label>
+              {expenses.length > 0 && (
+                <span className="text-xs font-bold text-primary">
+                  Total: ₹{expenses.reduce((s, e) => s + (e.amount || 0), 0).toLocaleString()}
+                </span>
+              )}
+            </div>
             <div className="space-y-2">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <select
                   value={expenseMode}
                   onChange={e => setExpenseMode(e.target.value as any)}
-                  className="h-10 rounded-xl border border-input bg-card px-3 text-xs font-medium"
+                  className="h-10 rounded-xl border border-input bg-card px-3 text-xs font-semibold"
                 >
-                  <option value="bus">Bus Ticket</option>
-                  <option value="auto">Auto Fare</option>
-                  <option value="bike_petrol">Bike Petrol</option>
-                  <option value="food">Site Food/Tea</option>
-                  <option value="other">Other Expense</option>
+                  <option value="food">Site Food & Tea for Crew</option>
+                  <option value="bike_petrol">Bike Petrol / Fuel</option>
+                  <option value="auto">Auto / Cab Fare</option>
+                  <option value="bus">Bus / Train Fare</option>
+                  <option value="materials">Local Materials / Hardware</option>
+                  <option value="tools">Tool Hire / Purchase</option>
+                  <option value="other">Other Site Expense</option>
                 </select>
-                {expenseMode === 'other' && (
-                  <Input
-                    placeholder="Expense name"
-                    value={expenseCustom}
-                    onChange={e => setExpenseCustom(e.target.value)}
-                    className="h-10 rounded-xl text-xs"
-                  />
-                )}
+                <Input
+                  placeholder={expenseMode === 'other' ? 'Expense description *' : 'Detail/Note (e.g. 5 teas, 2 brushes)'}
+                  value={expenseMode === 'other' ? expenseCustom : expenseNote}
+                  onChange={e => expenseMode === 'other' ? setExpenseCustom(e.target.value) : setExpenseNote(e.target.value)}
+                  className="h-10 rounded-xl text-xs"
+                />
                 <Input
                   type="number"
-                  placeholder="Amount (₹)"
+                  placeholder="Amount (₹) *"
                   value={expenseAmount}
                   onChange={e => setExpenseAmount(e.target.value)}
-                  className="h-10 rounded-xl text-xs"
+                  className="h-10 rounded-xl text-xs font-semibold"
                 />
               </div>
               <Button
@@ -651,19 +672,19 @@ export const WorkEntryTab = ({
                 variant="outline"
                 size="sm"
                 onClick={addExpense}
-                className="w-full h-9 rounded-xl text-xs gap-1 font-semibold"
+                className="w-full h-9 rounded-xl text-xs gap-1 font-semibold bg-muted/30 hover:bg-muted"
               >
-                <Plus className="w-3.5 h-3.5" /> Add Expense
+                <Plus className="w-3.5 h-3.5" /> Add Expense Item
               </Button>
 
               {expenses.length > 0 && (
-                <div className="space-y-1 pt-1">
+                <div className="space-y-1.5 pt-1">
                   {expenses.map((exp, idx) => (
-                    <div key={idx} className="flex justify-between items-center bg-muted/40 p-2 rounded-xl text-xs">
-                      <span className="capitalize text-foreground font-medium">{exp.itemName}</span>
+                    <div key={idx} className="flex justify-between items-center bg-muted/40 p-2.5 rounded-xl border border-border/40 text-xs">
+                      <span className="text-foreground font-medium">{exp.itemName}</span>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold">₹{exp.amount}</span>
-                        <button type="button" onClick={() => removeExpense(idx)} className="text-destructive hover:opacity-70">
+                        <span className="font-bold text-foreground">₹{exp.amount.toLocaleString()}</span>
+                        <button type="button" onClick={() => removeExpense(idx)} className="text-destructive hover:opacity-70 p-1">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>

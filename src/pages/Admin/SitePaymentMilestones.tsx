@@ -7,7 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { format } from 'date-fns';
 import {
   CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, Plus,
-  IndianRupee, XCircle, SendHorizonal, User, Layers, TrendingUp,
+  IndianRupee, XCircle, SendHorizonal, User, UserCircle, Layers, TrendingUp,
   TrendingDown, Package, Users, ShieldCheck, ArrowRight, Lock,
   AlertTriangle, DollarSign, Receipt
 } from 'lucide-react';
@@ -60,10 +60,28 @@ export const SitePaymentMilestones = ({
 
   // Master ordered stages list
   const masterStages = useMemo(() => {
-    return paymentStageMaster.length > 0
-      ? paymentStageMaster
-      : (site.paymentStages || []).map(s => s.stageName);
+    return (site.paymentStages && site.paymentStages.length > 0)
+      ? site.paymentStages.map(s => s.stageName)
+      : paymentStageMaster;
   }, [paymentStageMaster, site.paymentStages]);
+
+  // Identify any general / unmatched daily logs for this site
+  const unmatchedLogs = useMemo(() => {
+    return (dailyLogs || []).filter(l => {
+      if (l.siteId !== site.id) return false;
+      const matched = masterStages.some(stageName => {
+        const clean = (s: string) => s.replace(/^level\s*\d+\s*:\s*/i, '').toLowerCase().trim();
+        const normLog = (l.workLevelStage || '').toLowerCase().trim();
+        const normTarget = stageName.toLowerCase().trim();
+        const cleanLog = clean(normLog);
+        const cleanTarget = clean(normTarget);
+        if (normLog === normTarget || cleanLog === cleanTarget) return true;
+        if (cleanLog && cleanTarget && (cleanLog.includes(cleanTarget) || cleanTarget.includes(cleanLog))) return true;
+        return false;
+      });
+      return !matched;
+    });
+  }, [dailyLogs, site.id, masterStages]);
 
   const getStageData = (stageName: string): SitePaymentStage => {
     return (site.paymentStages || []).find((s) => s.stageName === stageName) || {
@@ -188,18 +206,38 @@ export const SitePaymentMilestones = ({
 
   // Helper to compute deep level finances & workforce
   const getStageFinancials = (stageName: string, stageData: SitePaymentStage) => {
+    const currentStageIdx = masterStages.indexOf(stageName);
+
     // Robust stage matching helper
     const isStageMatch = (workLevelStage?: string) => {
       if (!workLevelStage) {
         // Fallback: if log doesn't have a stage tag, match to active or first stage
-        const stages = site.paymentStages || [];
+        const stages = (site.paymentStages && site.paymentStages.length > 0)
+          ? site.paymentStages
+          : paymentStageMaster.map(s => ({ stageName: s }));
         if (stages.length <= 1) return true;
         const activeStage = stages.find(s => s.completionStatus === 'in_progress') || stages[0];
         return activeStage?.stageName === stageName;
       }
+
+      const clean = (s: string) => s.replace(/^level\s*\d+\s*:\s*/i, '').toLowerCase().trim();
       const normLog = workLevelStage.toLowerCase().trim();
       const normTarget = stageName.toLowerCase().trim();
-      return normLog === normTarget || normLog.includes(normTarget) || normTarget.includes(normLog);
+      const cleanLog = clean(normLog);
+      const cleanTarget = clean(normTarget);
+
+      // Exact name match or stripped level match
+      if (normLog === normTarget || cleanLog === cleanTarget) return true;
+      if (cleanLog && cleanTarget && (cleanLog.includes(cleanTarget) || cleanTarget.includes(cleanLog))) return true;
+
+      // Match by level index if tagged as "Level X"
+      const levelMatch = normLog.match(/level\s*(\d+)/i);
+      if (levelMatch && currentStageIdx >= 0) {
+        const loggedLevelNum = parseInt(levelMatch[1], 10);
+        if (loggedLevelNum === currentStageIdx + 1) return true;
+      }
+
+      return false;
     };
 
     // 1. Daily work logs for this stage
@@ -209,21 +247,55 @@ export const SitePaymentMilestones = ({
 
     // Daily supervisor incidental expenses (Food, Tea, Auto, Bus, Petrol, Other)
     const dailyMiscExpenses = stageLogs.reduce(
-      (sum, l) => sum + (l.expenses || []).reduce((s, e) => s + (e.amount || 0), 0),
+      (sum, l) => sum + (l.expenses || []).filter(e => !(e.itemName?.toLowerCase() === 'bike' && e.amount === 5)).reduce((s, e) => s + (e.amount || 0), 0),
       0
     );
 
-    // Daily supervisor travel & transport
+    // Daily supervisor travel & transport (ignoring legacy default 5 for bike)
     const dailyTransportExpenses = stageLogs.reduce(
-      (sum, l) => sum + (l.transportCost || 0),
+      (sum, l) => {
+        const isLegacyBikeCost = l.transportCost === 5 && (l.transportMode === 'bike' || !l.transportMode);
+        return sum + (!isLegacyBikeCost ? (l.transportCost || 0) : 0);
+      },
       0
     );
 
-    // Direct materials logged in daily logs
-    const dailyMaterialsCost = stageLogs.reduce(
-      (sum, l) => sum + (l.materials || []).reduce((s, m) => s + (m.cost || 0) * (m.quantity || 0), 0),
-      0
-    );
+    const supervisorDailyExpenses = dailyMiscExpenses + dailyTransportExpenses;
+
+    // Itemized supervisor incidental expenses
+    const supervisorExpenseItems: {
+      logId: string;
+      date: string;
+      staffName: string;
+      itemName: string;
+      amount: number;
+    }[] = [];
+
+    stageLogs.forEach(log => {
+      (log.expenses || []).forEach(exp => {
+        if (exp.amount && exp.amount > 0) {
+          // Skip legacy default 5 bike expense
+          if (exp.itemName?.toLowerCase() === 'bike' && exp.amount === 5) return;
+          supervisorExpenseItems.push({
+            logId: log.id,
+            date: log.date,
+            staffName: log.staffName || 'Supervisor',
+            itemName: exp.itemName || 'Site Expense',
+            amount: exp.amount,
+          });
+        }
+      });
+      const isLegacyBikeCost = log.transportCost === 5 && (log.transportMode === 'bike' || !log.transportMode);
+      if (log.transportCost && log.transportCost > 0 && !isLegacyBikeCost) {
+        supervisorExpenseItems.push({
+          logId: log.id,
+          date: log.date,
+          staffName: log.staffName || 'Supervisor',
+          itemName: `Travel (${(log.transportMode || 'Travel').toUpperCase()})`,
+          amount: log.transportCost,
+        });
+      }
+    });
 
     // 2. Material requests linked to this stage
     const stageReqs = materialRequests.filter(
@@ -243,28 +315,30 @@ export const SitePaymentMilestones = ({
       0
     );
 
-    // 4. Labour salary costs estimation from crew man-days
-    // For each daily log on this level, calculate:
-    //   painters × supervisor's underLabourSalary (or default ₹800/day)
-    //   plumbers × underLabourSalary
-    //   labourers × underLabourSalary
+    // 4. Labour salary costs estimation from supervisor crew worker counts
     let labourSalaryCost = 0;
-    stageLogs.forEach(log => {
-      const counts = log.workerCounts;
-      if (counts) {
-        // Find the supervisor who submitted this log to get their labour salary rates
-        const supervisor = staffList.find(s => s.id === log.staffId);
-        const dailySalary = supervisor?.underLabourSalary || 800; // default ₹800/day if not set
-        const totalCrewForDay = (counts.painter || 0) + (counts.plumber || 0) + (counts.labour || 0);
-        labourSalaryCost += totalCrewForDay * dailySalary;
-      }
+    const supervisorWorkLogs = stageLogs.map(log => {
+      const counts = log.workerCounts || { painter: 0, plumber: 0, labour: 0 };
+      const supervisor = staffList.find(s => s.id === log.staffId);
+      const dailySalary = supervisor?.underLabourSalary || 800; // default ₹800/day if not set
+      const totalWorkers = (counts.painter || 0) + (counts.plumber || 0) + (counts.labour || 0);
+      const dayLabourCost = totalWorkers * dailySalary;
+      labourSalaryCost += dayLabourCost;
+
+      return {
+        id: log.id,
+        date: log.date,
+        staffName: log.staffName || 'Supervisor',
+        counts,
+        totalWorkers,
+        dayLabourCost,
+        dailySalary,
+        notes: log.notes || '',
+        miscExpenses: (log.expenses || []).reduce((s, e) => s + (e.amount || 0), 0) + (log.transportCost || 0),
+      };
     });
 
-    // 5. Material rental costs for this site (prorated or total)
-    // Note: Rentals don't have workLevelStage, so we show site-level totals only in overall metrics
-    // If we want per-level, we'd need to tag rentals to levels (future enhancement)
-
-    const totalStageExpenses = dailyMiscExpenses + dailyTransportExpenses + dailyMaterialsCost + stageReqCost + manualExpenseCost + labourSalaryCost;
+    const totalStageExpenses = supervisorDailyExpenses + stageReqCost + manualExpenseCost + labourSalaryCost;
     const expected = stageData.expectedAmount || 0;
     const paid = stageData.paidAmount || 0;
     const balance = Math.max(0, expected - paid);
@@ -285,9 +359,11 @@ export const SitePaymentMilestones = ({
       stageLogs,
       stageReqs,
       stageManualExpenses,
+      supervisorDailyExpenses,
+      supervisorExpenseItems,
+      supervisorWorkLogs,
       dailyMiscExpenses,
       dailyTransportExpenses,
-      dailyMaterialsCost,
       stageReqCost,
       manualExpenseCost,
       labourSalaryCost,
@@ -493,7 +569,7 @@ export const SitePaymentMilestones = ({
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h5 className="text-xs sm:text-sm font-bold text-foreground">
-                        Level {idx + 1}: {stageName}
+                        {stageName.toLowerCase().startsWith('level') ? stageName : `Level ${idx + 1}: ${stageName}`}
                       </h5>
                     </div>
 
@@ -685,38 +761,159 @@ export const SitePaymentMilestones = ({
                     </div>
 
                     {/* Cost Breakdown Details */}
-                    <div className="p-3 bg-card rounded-xl border border-border/50 space-y-1.5 text-xs">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
-                        Expense Breakdown for Level {idx + 1}
+                    <div className="p-4 bg-card rounded-2xl border border-border/50 space-y-3 text-xs">
+                      <div className="flex items-center justify-between border-b border-border/40 pb-2">
+                        <div className="text-xs font-bold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                          Expense Breakdown for Level {idx + 1}
+                        </div>
+                        <span className="text-[10px] font-semibold text-muted-foreground">
+                          {fin.stageLogs.length} Supervisor Log{fin.stageLogs.length === 1 ? '' : 's'} Linked
+                        </span>
                       </div>
-                      <div className="flex justify-between py-0.5">
-                        <span className="text-muted-foreground">• Supervisor Daily Incidental Expenses (Food, Petrol, Tools, Misc)</span>
-                        <span className="font-semibold text-foreground">₹{fin.dailyMiscExpenses.toLocaleString()}</span>
+
+                      {/* Focused Category Summary (Strictly Supervisor & Level Costs) */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between py-1 border-b border-border/20">
+                          <span className="text-muted-foreground flex items-center gap-1.5">
+                            • Supervisor Daily Expenses (Food, Travel, Petrol, Local Purchases)
+                          </span>
+                          <span className="font-semibold text-foreground">₹{fin.supervisorDailyExpenses.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between py-1 border-b border-border/20">
+                          <span className="text-muted-foreground flex items-center gap-1.5">
+                            • Labour Salary Cost (from Supervisor Worker Counts: {fin.totalCrewManDays} Man-Days)
+                          </span>
+                          <span className="font-semibold text-foreground">₹{fin.labourSalaryCost.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between py-1 border-b border-border/20">
+                          <span className="text-muted-foreground flex items-center gap-1.5">
+                            • Dispatched Material Requisitions (Requested by Supervisor)
+                          </span>
+                          <span className="font-semibold text-foreground">₹{fin.stageReqCost.toLocaleString()}</span>
+                        </div>
+                        {fin.manualExpenseCost > 0 && (
+                          <div className="flex justify-between py-1 border-b border-border/20">
+                            <span className="text-muted-foreground flex items-center gap-1.5">
+                              • Admin Manual Expenses
+                            </span>
+                            <span className="font-semibold text-foreground">₹{fin.manualExpenseCost.toLocaleString()}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between pt-2 border-t border-border/40 font-bold text-sm">
+                          <span>TOTAL LEVEL EXPENSES</span>
+                          <span className={fin.isOverBudget ? 'text-destructive font-black' : 'text-foreground'}>
+                            ₹{fin.totalStageExpenses.toLocaleString()}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex justify-between py-0.5">
-                        <span className="text-muted-foreground">• Staff Travel & Transport Costs</span>
-                        <span className="font-semibold text-foreground">₹{fin.dailyTransportExpenses.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between py-0.5">
-                        <span className="text-muted-foreground">• Direct Daily Log Materials</span>
-                        <span className="font-semibold text-foreground">₹{fin.dailyMaterialsCost.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between py-0.5">
-                        <span className="text-muted-foreground">• Dispatched Material Requisitions</span>
-                        <span className="font-semibold text-foreground">₹{fin.stageReqCost.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between py-0.5">
-                        <span className="text-muted-foreground">• Admin Manual Expenses</span>
-                        <span className="font-semibold text-foreground">₹{fin.manualExpenseCost.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between py-0.5">
-                        <span className="text-muted-foreground">• Estimated Labour Salary Cost (Crew × Daily Rate)</span>
-                        <span className="font-semibold text-foreground">₹{fin.labourSalaryCost.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between pt-1.5 border-t border-border/40 font-bold">
-                        <span>TOTAL LEVEL EXPENSES</span>
-                        <span className={fin.isOverBudget ? 'text-destructive' : 'text-foreground'}>₹{fin.totalStageExpenses.toLocaleString()}</span>
-                      </div>
+
+                      {/* ── Itemized Supervisor Expense Details ── */}
+                      {fin.supervisorExpenseItems.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                              📋 Supervisor Daily Expense Items ({fin.supervisorExpenseItems.length})
+                            </span>
+                            <span className="text-[10px] font-bold text-amber-600 bg-amber-500/10 px-2 py-0.5 rounded-md">
+                              Total: ₹{fin.supervisorDailyExpenses.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {fin.supervisorExpenseItems.map((item, itemIdx) => (
+                              <div key={itemIdx} className="p-2.5 rounded-xl bg-muted/20 border border-border/40 flex items-center justify-between text-xs">
+                                <div className="space-y-0.5 min-w-0 pr-2">
+                                  <span className="font-semibold text-foreground block truncate">{item.itemName}</span>
+                                  <span className="text-[10px] text-muted-foreground block">
+                                    {format(new Date(item.date), 'dd MMM yyyy')} • by {item.staffName}
+                                  </span>
+                                </div>
+                                <span className="font-bold text-foreground shrink-0">₹{item.amount.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Itemized Supervisor Labour & Daily Work Logs ── */}
+                      {fin.supervisorWorkLogs.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                              👷 Supervisor Daily Work & Crew Logs ({fin.supervisorWorkLogs.length} Days)
+                            </span>
+                            <span className="text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                              Labour Wages: ₹{fin.labourSalaryCost.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="space-y-2">
+                            {fin.supervisorWorkLogs.map((log) => (
+                              <div key={log.id} className="p-2.5 rounded-xl bg-muted/20 border border-border/40 space-y-1.5 text-xs">
+                                <div className="flex items-center justify-between flex-wrap gap-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-foreground">{format(new Date(log.date), 'dd MMM yyyy')}</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                      by {log.staffName}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <span className="font-semibold text-muted-foreground">
+                                      {[
+                                        log.counts.painter ? `${log.counts.painter} Painter${log.counts.painter > 1 ? 's' : ''}` : '',
+                                        log.counts.plumber ? `${log.counts.plumber} Plumber${log.counts.plumber > 1 ? 's' : ''}` : '',
+                                        log.counts.labour ? `${log.counts.labour} Labourer${log.counts.labour > 1 ? 's' : ''}` : ''
+                                      ].filter(Boolean).join(', ') || '0 Crew'} ({log.totalWorkers} workers)
+                                    </span>
+                                    <span className="font-bold text-foreground">• ₹{log.dayLabourCost.toLocaleString()}</span>
+                                  </div>
+                                </div>
+                                {log.notes && (
+                                  <p className="text-[11px] text-muted-foreground italic border-l-2 border-primary/40 pl-2">
+                                    "{log.notes}"
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Itemized Material Requisitions ── */}
+                      {fin.stageReqs.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-border/40 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                              📦 Material Requisitions for Level {idx + 1} ({fin.stageReqs.length})
+                            </span>
+                            <span className="text-[10px] font-bold text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded-md">
+                              Total: ₹{fin.stageReqCost.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="space-y-1.5">
+                            {fin.stageReqs.map((req) => (
+                              <div key={req.id} className="p-2.5 rounded-xl bg-muted/20 border border-border/40 flex items-center justify-between text-xs">
+                                <div className="space-y-0.5 min-w-0 pr-2">
+                                  <span className="font-semibold text-foreground block truncate">
+                                    {req.items.map(it => `${it.name} (${it.quantity} ${it.unit || 'Units'})`).join(', ')}
+                                  </span>
+                                  <div className="text-[10px] text-muted-foreground">
+                                    {format(new Date(req.date), 'dd MMM yyyy')} • Requested by {req.requestedByStaffName} • <span className="capitalize font-semibold text-blue-600">{req.status}</span>
+                                  </div>
+                                </div>
+                                <span className="font-bold text-foreground shrink-0">
+                                  ₹{((req.materialCost || req.supplierPrice || 0) + (req.driverWage || 0) + (req.petrolCharge || 0)).toLocaleString()}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Empty state when supervisor hasn't logged anything yet */}
+                      {fin.stageLogs.length === 0 && fin.stageReqs.length === 0 && (
+                        <div className="mt-2 p-3 rounded-xl border border-dashed border-border/60 bg-muted/10 text-center text-xs text-muted-foreground">
+                          ℹ️ No supervisor entries or expenses recorded for Level {idx + 1} yet. Once the supervisor logs daily work, incidental expenses (food, travel, local tools), or crew worker counts, they will be itemized here.
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1042,7 +1239,79 @@ export const SitePaymentMilestones = ({
           );
         })}
 
-        {masterStages.length === 0 && (
+        {unmatchedLogs.length > 0 && (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold text-xs">
+                  <SendHorizonal className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-heading font-bold text-sm text-foreground">
+                    Additional Site Work Logs & Field Entries ({unmatchedLogs.length})
+                  </h4>
+                  <p className="text-[11px] text-muted-foreground">
+                    Work entries & expenses recorded by supervisors for this site.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {unmatchedLogs.map((log, idx) => (
+                <div key={log.id || idx} className="p-3 bg-card rounded-xl border border-border/60 text-xs space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-1.5">
+                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+                      <UserCircle className="w-3.5 h-3.5 text-primary" />
+                      {log.staffName || 'Supervisor'}
+                    </span>
+                    <span className="font-mono text-muted-foreground text-[11px]">
+                      📅 {log.date} {log.workLevelStage ? `• [${log.workLevelStage}]` : ''}
+                    </span>
+                  </div>
+
+                  {log.notes && (
+                    <p className="text-muted-foreground text-xs whitespace-pre-line bg-muted/30 p-2 rounded-lg">
+                      {log.notes}
+                    </p>
+                  )}
+
+                  {log.workerCounts && (Number(log.workerCounts.painter) > 0 || Number(log.workerCounts.plumber) > 0 || Number(log.workerCounts.labour) > 0) && (
+                    <div className="flex flex-wrap gap-1.5 pt-1 text-[11px]">
+                      <span className="text-[10px] font-bold text-muted-foreground uppercase mr-1">Crew on site:</span>
+                      {Number(log.workerCounts.painter) > 0 && <span className="px-2 py-0.5 rounded bg-muted font-medium">🎨 {log.workerCounts.painter} Painters</span>}
+                      {Number(log.workerCounts.plumber) > 0 && <span className="px-2 py-0.5 rounded bg-muted font-medium">🔧 {log.workerCounts.plumber} Plumbers</span>}
+                      {Number(log.workerCounts.labour) > 0 && <span className="px-2 py-0.5 rounded bg-muted font-medium">🔨 {log.workerCounts.labour} Labourers</span>}
+                    </div>
+                  )}
+
+                  {log.expenses && log.expenses.length > 0 && (
+                    <div className="pt-1.5 border-t border-border/40 space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-destructive block">
+                        Itemized Daily Expenses:
+                      </span>
+                      {log.expenses.map((e, eIdx) => (
+                        <div key={eIdx} className="flex justify-between items-center text-[11px]">
+                          <span className="text-muted-foreground">{e.itemName}:</span>
+                          <span className="font-semibold text-destructive font-mono">₹{e.amount}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {log.incomeFromClient > 0 && (
+                    <div className="flex justify-between items-center text-[11px] pt-1 border-t border-border/40 text-emerald-600 font-semibold">
+                      <span>Client Payment Received:</span>
+                      <span className="font-mono font-bold">+₹{log.incomeFromClient.toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {masterStages.length === 0 && unmatchedLogs.length === 0 && (
           <div className="p-6 text-center text-xs text-muted-foreground border border-dashed rounded-xl">
             No construction stages or payment milestones defined in Settings. Please add them in Master Data.
           </div>

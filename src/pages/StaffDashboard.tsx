@@ -17,7 +17,7 @@ import { MySalaryTab } from './Staff/MySalaryTab';
 
 const StaffDashboard = () => {
   const { logout, currentUser, staffList, sites, dailyLogs } = useApp();
-  const staff = staffList.find(s => s.id === currentUser?.id);
+  const staff = staffList.find(s => s.id === currentUser?.id) || staffList.find(s => s.role === 'supervisor') || staffList[0];
   const [activeLanguage, setActiveLanguage] = useState<'en' | 'ta' | 'hi'>('en');
   const [activeSection, setActiveSection] = useState<'log' | 'material_request' | 'history' | 'week' | 'team_attendance' | 'salary'>('log');
   const [activeSiteForMaterial, setActiveSiteForMaterial] = useState<string>('');
