@@ -8,13 +8,13 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns';
 import {
   TrendingUp, TrendingDown, IndianRupee, MapPin, UserCircle, Clock,
-  FileDown, Building2, Package, Truck, Wallet, Coffee, CheckCircle2, AlertTriangle
+  FileDown, Building2, Package, Truck, Wallet, Coffee, CheckCircle2, AlertTriangle, RefreshCw, Users
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 export const ReportsTab = () => {
-  const { dailyLogs, sites, manualExpenses, materialRequests, staffList, attendances, addExpense, deleteExpense } = useApp();
+  const { dailyLogs, sites, manualExpenses, materialRequests, materialRentals, staffList, attendances, addExpense, deleteExpense } = useApp();
 
   const [selectedSiteId, setSelectedSiteId] = useState('all');
   const [fromDate, setFromDate] = useState(
@@ -30,6 +30,7 @@ export const ReportsTab = () => {
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('');
   const [expenseDescription, setExpenseDescription] = useState('');
+  const [expensePaymentMethod, setExpensePaymentMethod] = useState<'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Card' | 'Other'>('Cash');
 
   const handleAddExpense = (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,7 +41,8 @@ export const ReportsTab = () => {
       date: expenseDate,
       amount: Number(expenseAmount),
       category: expenseCategory,
-      description: expenseDescription
+      description: expenseDescription,
+      paymentMethod: expensePaymentMethod
     });
     setExpenseAmount('');
     setExpenseDescription('');
@@ -97,7 +99,23 @@ export const ReportsTab = () => {
     return filteredLogs.reduce((sum, l) => sum + (l.incomeFromClient || 0), 0);
   }, [filteredLogs]);
 
-  const totalInflow = directClientIncome;
+  // B) Client Payments from Site Payment Milestones
+  const milestoneIncome = useMemo(() => {
+    return sites
+      .filter(s => selectedSiteId === 'all' || s.id === selectedSiteId)
+      .reduce((sum, site) => {
+        const stageSum = (site.paymentStages || []).reduce((stSum, stage) => {
+          const pSum = (stage.payments || []).filter(p => {
+            const pDate = p.date || '';
+            return pDate >= fromDate && pDate <= toDate;
+          }).reduce((ps, p) => ps + (p.amount || 0), 0);
+          return stSum + pSum;
+        }, 0);
+        return sum + stageSum;
+      }, 0);
+  }, [sites, selectedSiteId, fromDate, toDate]);
+
+  const totalInflow = directClientIncome + milestoneIncome;
 
   // 2. EXPENSES
   // A) Materials Expense (daily logs + store & supplier requisitions)
@@ -120,8 +138,12 @@ export const ReportsTab = () => {
   }, [filteredLogs]);
 
   const reqTransportCost = useMemo(() => {
-    return filteredRequests.reduce((sum, r) => sum + (r.driverCost || 0) + (Number(r.petrolCharge) || 0), 0);
-  }, [filteredRequests]);
+    return filteredRequests.reduce((sum, r) => {
+      // Petrol charge is excluded from site expenses as per site requirement
+      const pet = selectedSiteId === 'all' ? (Number(r.petrolCharge) || 0) : 0;
+      return sum + (r.driverCost || 0) + pet;
+    }, 0);
+  }, [filteredRequests, selectedSiteId]);
 
   const totalTransportExpense = logTransportCost + reqTransportCost;
 
@@ -133,42 +155,306 @@ export const ReportsTab = () => {
     );
   }, [filteredLogs]);
 
-  // D) Staff Payroll & Labor Wages for the period
-  const totalPayrollExpense = useMemo(() => {
-    return staffList.reduce((sum, staff) => {
+  // D) Staff & Crew Payroll Breakdown & Expenses for the period
+  const payrollData = useMemo(() => {
+    let supervisorTotal = 0;
+    let driverTotal = 0;
+    let registeredCrewTotal = 0;
+    let siteCrewTeamTotal = 0;
+
+    const staffCards: {
+      id: string;
+      name: string;
+      role: string;
+      category: 'supervisor' | 'driver' | 'crew' | 'crew_team';
+      days: number;
+      otHours: number;
+      basePay: number;
+      otPay: number;
+      extraPay: number;
+      totalEarned: number;
+    }[] = [];
+
+    // 1. Individual Named Staff (Supervisors, Drivers, Registered Staff)
+    staffList.forEach(staff => {
       const staffAtts = (attendances || []).filter(
         a => a.staffId === staff.id && a.date >= fromDate && a.date <= toDate
       );
-      if (selectedSiteId !== 'all') {
-        // Only count if assigned to this site or worked on this site
-        const workedSiteAtts = staffAtts.filter(a => a.siteId === selectedSiteId);
-        if (workedSiteAtts.length === 0) return sum;
-      }
+
+      const relevantAtts = selectedSiteId === 'all'
+        ? staffAtts
+        : staffAtts.filter(a => {
+            if (a.siteId) {
+              return a.siteId === selectedSiteId;
+            }
+            if (a.siteAssignments && a.siteAssignments.length > 0 && staff.role !== 'supervisor') {
+              return a.siteAssignments.some(sa => sa.siteId === selectedSiteId);
+            }
+            return false;
+          });
+
+      if (relevantAtts.length === 0 && selectedSiteId !== 'all') return;
 
       const dailyBase =
         staff.salaryType === 'hourly'
           ? (staff.perHourSalary || 0) * 8
-          : staff.perDaySalary || 0;
-      const otRate = staff.incentivePerHour || 0;
+          : (staff.perDaySalary || (staff.role === 'supervisor' ? 800 : staff.role === 'driver' ? 700 : 650));
+      const otRate = staff.incentivePerHour || (staff.role === 'supervisor' ? 100 : 80);
 
-      let staffWages = 0;
-      staffAtts.forEach(att => {
-        if (att.status === 'present' || att.status === 'half-day') {
-          staffWages += att.status === 'half-day' ? dailyBase / 2 : dailyBase;
-          staffWages += (att.otHours || 0) * otRate;
+      let fullDays = 0;
+      let halfDays = 0;
+      let otHours = 0;
+      let basePay = 0;
+      let otPay = 0;
+      let extraPay = 0;
+
+      relevantAtts.forEach(att => {
+        if (att.status === 'present') {
+          fullDays += 1;
+          basePay += dailyBase;
+        } else if (att.status === 'half-day') {
+          halfDays += 1;
+          basePay += dailyBase / 2;
         }
+        const ot = att.otHours || 0;
+        otHours += ot;
+        otPay += ot * otRate;
       });
 
-      return sum + staffWages;
-    }, 0);
-  }, [staffList, attendances, fromDate, toDate, selectedSiteId]);
+      // Extra allowances for drivers (transit trips from logs)
+      if (staff.role === 'driver') {
+        const driverLogs = filteredLogs.filter(l => l.driverId === staff.id || l.staffId === staff.id);
+        const transitFromLogs = driverLogs.reduce((sum, l) => sum + (l.transportCost || 0), 0);
+        extraPay += transitFromLogs;
+      }
+
+      const totalEarned = basePay + otPay + extraPay;
+      if (fullDays > 0 || halfDays > 0 || otHours > 0 || totalEarned > 0) {
+        if (staff.role === 'supervisor') supervisorTotal += totalEarned;
+        else if (staff.role === 'driver') driverTotal += totalEarned;
+        else registeredCrewTotal += totalEarned;
+
+        staffCards.push({
+          id: staff.id,
+          name: staff.name,
+          role: staff.role,
+          category: staff.role === 'supervisor' ? 'supervisor' : staff.role === 'driver' ? 'driver' : 'crew',
+          days: fullDays + (halfDays * 0.5),
+          otHours,
+          basePay,
+          otPay,
+          extraPay,
+          totalEarned
+        });
+      }
+    });
+
+    // 2. Supervisor-Managed Site Crew Teams (Under-Labour: Painters, Plumbers, Helpers)
+    const supervisors = staffList.filter(s => s.role === 'supervisor');
+    supervisors.forEach(sup => {
+      const supAtts = (attendances || []).filter(
+        a => a.staffId === sup.id && a.date >= fromDate && a.date <= toDate && (a.presentCounts || a.halfDayCounts || (a.siteAssignments && a.siteAssignments.length > 0))
+      );
+
+      const relevantSupAtts = selectedSiteId === 'all'
+        ? supAtts
+        : supAtts.filter(a => {
+            if (a.siteId) {
+              return a.siteId === selectedSiteId;
+            }
+            if (a.siteAssignments && a.siteAssignments.length > 0) {
+              return a.siteAssignments.some(sa => sa.siteId === selectedSiteId);
+            }
+            return false;
+          });
+
+      if (relevantSupAtts.length === 0) return;
+
+      const crewRate = sup.underLabourSalary || 700;
+      const crewOtRate = sup.underLabourOT || 100;
+
+      let teamDays = 0;
+      let teamOtHours = 0;
+      let teamBasePay = 0;
+      let teamOtPay = 0;
+
+      relevantSupAtts.forEach(att => {
+        let fullCount = Object.values(att.presentCounts || {}).reduce((s, c) => s + (c || 0), 0);
+        let halfCount = Object.values(att.halfDayCounts || {}).reduce((s, c) => s + (c || 0), 0);
+
+        // If site selected, check site-specific assignment
+        if (selectedSiteId !== 'all' && att.siteAssignments && att.siteAssignments.length > 0) {
+          const siteAlloc = att.siteAssignments.find(sa => sa.siteId === selectedSiteId);
+          if (siteAlloc && siteAlloc.counts) {
+            fullCount = Object.values(siteAlloc.counts).reduce((s, c) => s + (Number(c) || 0), 0);
+            halfCount = 0;
+          }
+        }
+
+        const ot = att.unnamedOtHours || 0;
+        const otStaff = att.unnamedOtStaffCount !== undefined ? att.unnamedOtStaffCount : (ot > 0 ? (fullCount + halfCount) : 0);
+
+        const dayCrewBase = (fullCount * crewRate) + (halfCount * (crewRate / 2));
+        const dayCrewOt = otStaff * ot * crewOtRate;
+
+        teamDays += fullCount + (halfCount * 0.5);
+        teamOtHours += ot;
+        teamBasePay += dayCrewBase;
+        teamOtPay += dayCrewOt;
+      });
+
+      const teamTotal = teamBasePay + teamOtPay;
+      if (teamDays > 0 || teamTotal > 0) {
+        siteCrewTeamTotal += teamTotal;
+        staffCards.push({
+          id: `crew_team_${sup.id}`,
+          name: `${sup.name}'s Site Crew Team`,
+          role: 'Site Crew (Painters, Plumbers, Helpers)',
+          category: 'crew_team',
+          days: teamDays,
+          otHours: teamOtHours,
+          basePay: teamBasePay,
+          otPay: teamOtPay,
+          extraPay: 0,
+          totalEarned: teamTotal
+        });
+      }
+    });
+
+    // 3. Worker Counts and Employee Salaries from Daily Logs
+    filteredLogs.forEach(log => {
+      // Check for named employee salaries stored on log (excluding supervisor who is already tracked above)
+      if (log.employeeSalaries && Array.isArray(log.employeeSalaries)) {
+        log.employeeSalaries.filter(emp => emp.role !== 'supervisor').forEach(emp => {
+          const empSalary = Number(emp.totalSalary) || 0;
+          if (empSalary > 0) {
+            registeredCrewTotal += empSalary;
+            staffCards.push({
+              id: `emp_${emp.name}_${log.id}`,
+              name: emp.name || 'Crew Member',
+              role: emp.role || 'Crew Worker',
+              category: 'crew',
+              days: 1,
+              otHours: 0,
+              basePay: empSalary,
+              otPay: 0,
+              extraPay: 0,
+              totalEarned: empSalary
+            });
+          }
+        });
+      }
+
+      // Check for workerCounts if attendance didn't capture crew for this date & supervisor
+      if (log.workerCounts && Object.values(log.workerCounts).some(v => (Number(v) || 0) > 0)) {
+        const alreadyCountedInAtt = (attendances || []).some(
+          a => (a.staffId === log.staffId || a.siteId === log.siteId) && a.date === log.date && (a.presentCounts || a.halfDayCounts)
+        );
+        if (!alreadyCountedInAtt) {
+          const sup = staffList.find(s => s.id === log.staffId) || staffList.find(s => s.role === 'supervisor');
+          const crewRate = sup?.underLabourSalary || 700;
+          const logCrewCount = Object.values(log.workerCounts).reduce((s, c) => s + (Number(c) || 0), 0);
+          const logCrewCost = logCrewCount * crewRate;
+
+          siteCrewTeamTotal += logCrewCost;
+          const existingTeam = staffCards.find(c => c.id === `crew_team_${sup?.id || 'daily_logs'}`);
+          if (existingTeam) {
+            existingTeam.days += logCrewCount;
+            existingTeam.basePay += logCrewCost;
+            existingTeam.totalEarned += logCrewCost;
+          } else {
+            staffCards.push({
+              id: `crew_team_${sup?.id || 'daily_logs'}`,
+              name: `${sup?.name || 'Site'} Crew Team (Work Logs)`,
+              role: 'Site Crew (Painters, Plumbers, Helpers)',
+              category: 'crew_team',
+              days: logCrewCount,
+              otHours: 0,
+              basePay: logCrewCost,
+              otPay: 0,
+              extraPay: 0,
+              totalEarned: logCrewCost
+            });
+          }
+        }
+      }
+    });
+
+    const crewTotal = registeredCrewTotal + siteCrewTeamTotal;
+    const totalPayroll = supervisorTotal + driverTotal + crewTotal;
+
+    return {
+      supervisorTotal,
+      driverTotal,
+      crewTotal,
+      siteCrewTeamTotal,
+      registeredCrewTotal,
+      totalPayroll,
+      staffCards
+    };
+  }, [staffList, attendances, filteredLogs, fromDate, toDate, selectedSiteId, sites]);
+
+  const totalPayrollExpense = payrollData.totalPayroll;
+
+  // Paid payroll settlements from History
+  const paidHistoryRecords = useMemo(() => {
+    try {
+      const stored = localStorage.getItem('edamari_payroll_history');
+      const allHistory: any[] = stored ? JSON.parse(stored) : [];
+      return allHistory.filter(h => {
+        const pDate = h.fromDate || (h.paidAt ? h.paidAt.split(',')[0] : '');
+        const inDate = (h.fromDate && h.fromDate >= fromDate && h.toDate <= toDate) ||
+                       (pDate && pDate >= fromDate && pDate <= toDate);
+        if (!inDate) return false;
+        if (selectedSiteId !== 'all') {
+          const staffWorkedOnSite = (attendances || []).some(
+            a => a.staffId === h.staffId && (a.siteId === selectedSiteId || a.siteAssignments?.some(sa => sa.siteId === selectedSiteId))
+          ) || (filteredLogs || []).some(
+            l => (l.staffId === h.staffId || l.driverId === h.staffId) && l.siteId === selectedSiteId
+          );
+          return staffWorkedOnSite;
+        }
+        return true;
+      });
+    } catch {
+      return [];
+    }
+  }, [fromDate, toDate, selectedSiteId, attendances, filteredLogs]);
+
+  const totalPaidPayroll = useMemo(() => {
+    return paidHistoryRecords.reduce((sum, h) => sum + (h.totalAmount || 0), 0);
+  }, [paidHistoryRecords]);
 
   const totalManualExpense = useMemo(() => {
     return filteredManualExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
   }, [filteredManualExpenses]);
 
+  // E) Rental Equipment & Machinery on Site
+  const filteredRentals = useMemo(() => {
+    return (materialRentals || []).filter(r => {
+      if (selectedSiteId !== 'all' && r.siteId !== selectedSiteId) return false;
+      const rStart = r.startDate || fromDate;
+      const rEnd = r.endDate || (r.status === 'active' ? format(new Date(), 'yyyy-MM-dd') : rStart);
+      return rStart <= toDate && rEnd >= fromDate;
+    });
+  }, [materialRentals, selectedSiteId, fromDate, toDate]);
+
+  const totalRentalExpense = useMemo(() => {
+    return filteredRentals.reduce((sum, r) => {
+      if (r.totalRentalCost !== undefined && r.status === 'returned') {
+        return sum + r.totalRentalCost;
+      }
+      const effStart = r.startDate && r.startDate > fromDate ? r.startDate : fromDate;
+      const effEnd = r.endDate && r.endDate < toDate ? r.endDate : toDate;
+      const startMs = new Date(effStart + 'T00:00:00').getTime();
+      const endMs = new Date(effEnd + 'T00:00:00').getTime();
+      const days = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+      return sum + (days * (r.quantity || 1) * (r.rentalRatePerDay || 0)) + (r.transitCost || 0);
+    }, 0);
+  }, [filteredRentals, fromDate, toDate]);
+
   // Total Outflow
-  const totalOutflow = totalMaterialsExpense + totalTransportExpense + totalMiscExpense + totalPayrollExpense + totalManualExpense;
+  const totalOutflow = totalMaterialsExpense + totalTransportExpense + totalRentalExpense + totalMiscExpense + totalPayrollExpense + totalManualExpense;
 
   // 3. NET PROFIT OR LOSS
   const netProfitLoss = totalInflow - totalOutflow;
@@ -185,7 +471,7 @@ export const ReportsTab = () => {
     // Company Header
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 14, 20);
+    doc.text('JGS CONSTRUCTION & INTERIORS', 14, 20);
 
     doc.setFontSize(13);
     doc.setTextColor(40);
@@ -256,7 +542,9 @@ export const ReportsTab = () => {
     const expHead = [['Expense Category', 'Amount (Rs)', 'Share %', 'Scope']];
     const expBody = [
       ['Materials & Requisitions', totalMaterialsExpense.toLocaleString(), totalOutflow > 0 ? `${((totalMaterialsExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Site logs + Store & Supplier dispatches'],
-      ['Staff Payroll & Labor Wages', totalPayrollExpense.toLocaleString(), totalOutflow > 0 ? `${((totalPayrollExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Supervisor, Driver & Crew payroll'],
+      ['Rental Equipment & Machinery', totalRentalExpense.toLocaleString(), totalOutflow > 0 ? `${((totalRentalExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Scaffolding, machines & equipment deployed'],
+      ['Staff Payroll (Supervisors & Drivers)', (payrollData.supervisorTotal + payrollData.driverTotal).toLocaleString(), totalOutflow > 0 ? `${(((payrollData.supervisorTotal + payrollData.driverTotal) / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Supervisor & Driver salaries, OT & transit'],
+      ['Site Crew Team Wages', payrollData.crewTotal.toLocaleString(), totalOutflow > 0 ? `${((payrollData.crewTotal / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Under-labour crew: Painters, Plumbers, Helpers'],
       ['Transport, Transit & Petrol', totalTransportExpense.toLocaleString(), totalOutflow > 0 ? `${((totalTransportExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Daily travel + Driver dispatches & fuel'],
       ['Site Incidentals & Miscellaneous', totalMiscExpense.toLocaleString(), totalOutflow > 0 ? `${((totalMiscExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Food, tea, site tools & misc'],
       ['Manual General Expenses', totalManualExpense.toLocaleString(), totalOutflow > 0 ? `${((totalManualExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Office rent, tools, custom entries'],
@@ -280,6 +568,63 @@ export const ReportsTab = () => {
         if (data.row.index === expBody.length - 1) {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.fillColor = [254, 226, 226];
+        }
+      }
+    });
+
+    // 3. Staff & Crew Payroll Breakdown Table
+    const lastY2 = (doc as any).lastAutoTable?.finalY || 200;
+    const startYPay = lastY2 > 210 ? 25 : lastY2 + 14;
+    if (lastY2 > 210) {
+      doc.addPage();
+    }
+    doc.setFontSize(11);
+    doc.setTextColor(40);
+    doc.text('3. Itemized Staff & Crew Payroll Ledger', 14, startYPay - 4);
+
+    const payHead = [['Staff / Crew Member', 'Role / Category', 'Man-Days', 'OT (Hrs)', 'Total Amount (Rs)', 'Status']];
+    const payBody = payrollData.staffCards.map(s => {
+      const isPaid = paidHistoryRecords.some(h => h.staffId === s.id);
+      return [
+        s.name,
+        s.role,
+        `${s.days}d`,
+        s.otHours > 0 ? `${s.otHours}h` : '-',
+        s.totalEarned.toLocaleString(),
+        isPaid ? 'PAID' : 'PENDING'
+      ];
+    });
+
+    if (payBody.length > 0) {
+      payBody.push([
+        'TOTAL PAYROLL',
+        'All staff & crew teams',
+        `${payrollData.staffCards.reduce((sum, s) => sum + s.days, 0)}d`,
+        `${payrollData.staffCards.reduce((sum, s) => sum + s.otHours, 0)}h`,
+        payrollData.totalPayroll.toLocaleString(),
+        totalPaidPayroll > 0 ? `Paid: Rs ${totalPaidPayroll.toLocaleString()}` : 'PENDING'
+      ]);
+    }
+
+    autoTable(doc, {
+      startY: startYPay,
+      head: payHead,
+      body: payBody.length > 0 ? payBody : [['No staff or crew payroll entries found for this period', '-', '-', '-', '0', '-']],
+      theme: 'grid',
+      headStyles: { fillColor: [124, 58, 237], fontSize: 8, fontStyle: 'bold' },
+      bodyStyles: { fontSize: 8 },
+      columnStyles: {
+        0: { fontStyle: 'bold', cellWidth: 50 },
+        1: { cellWidth: 45 },
+        2: { halign: 'center', cellWidth: 20 },
+        3: { halign: 'center', cellWidth: 20 },
+        4: { halign: 'right', fontStyle: 'bold', cellWidth: 28 },
+        5: { halign: 'center', cellWidth: 19 }
+      },
+      didParseCell: function(data) {
+        if (payBody.length > 0 && data.row.index === payBody.length - 1) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [243, 232, 255];
         }
       }
     });
@@ -457,8 +802,8 @@ export const ReportsTab = () => {
         </div>
       </Card>
 
-      {/* 4 Financial Pillar KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* 5 Financial Pillar KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {/* Income Card */}
         <Card className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 space-y-1">
           <span className="text-[10px] uppercase font-bold text-emerald-800 dark:text-emerald-300 tracking-wider block">
@@ -485,21 +830,45 @@ export const ReportsTab = () => {
           </p>
         </Card>
 
+        {/* Rentals on Site Card */}
+        <Card className="p-4 rounded-2xl bg-amber-500/[0.08] border border-amber-500/25 shadow-xs space-y-1">
+          <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-300 tracking-wider flex items-center gap-1">
+            <RefreshCw className="w-3 h-3 text-amber-600" /> Rentals on Site
+          </span>
+          <p className="text-2xl font-heading font-bold text-amber-700 dark:text-amber-400">
+            ₹{totalRentalExpense.toLocaleString()}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {filteredRentals.length} machinery & rental items
+          </p>
+        </Card>
+
         {/* Payroll Card */}
         <Card className="p-4 rounded-2xl bg-card border border-border/50 shadow-xs space-y-1">
-          <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
-            👷 Staff & Crew Payroll
+          <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider flex items-center justify-between">
+            <span>👷 Staff & Crew Payroll</span>
+            {totalPaidPayroll > 0 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 font-bold">
+                ✓ Disbursed
+              </span>
+            )}
           </span>
           <p className="text-2xl font-heading font-bold text-foreground">
             ₹{totalPayrollExpense.toLocaleString()}
           </p>
-          <p className="text-[11px] text-muted-foreground">
-            Attendance wages & overtime
-          </p>
+          <div className="text-[10px] text-muted-foreground space-y-0.5 pt-0.5">
+            <div>Sup: ₹{payrollData.supervisorTotal.toLocaleString()} · Drv: ₹{payrollData.driverTotal.toLocaleString()}</div>
+            <div className="text-amber-700 dark:text-amber-300 font-medium">Crew Teams: ₹{payrollData.crewTotal.toLocaleString()}</div>
+            {totalPaidPayroll > 0 && (
+              <div className="text-emerald-600 dark:text-emerald-400 font-semibold pt-0.5 border-t border-border/30">
+                Disbursed: ₹{totalPaidPayroll.toLocaleString()}
+              </div>
+            )}
+          </div>
         </Card>
 
         {/* Transport & Misc */}
-        <Card className="p-4 rounded-2xl bg-card border border-border/50 shadow-xs space-y-1">
+        <Card className="p-4 rounded-2xl bg-card border border-border/50 shadow-xs space-y-1 col-span-2 sm:col-span-1">
           <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
             🚚 Transit & Site Food
           </span>
@@ -553,12 +922,48 @@ export const ReportsTab = () => {
               <span className="font-bold text-sm text-destructive">₹{totalMaterialsExpense.toLocaleString()}</span>
             </div>
 
-            <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-muted/40">
+            <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-amber-500/[0.06] border border-amber-500/20">
               <div>
-                <span className="font-semibold text-foreground block">Staff Wages & Crew Payroll</span>
-                <span className="text-[10px] text-muted-foreground">Base pay, OT, driver & crew pay</span>
+                <span className="font-semibold text-foreground flex items-center gap-1.5">
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                  Rental Equipment & Machinery
+                </span>
+                <span className="text-[10px] text-muted-foreground">Scaffolding, tools & machinery on site ({filteredRentals.length} deployments)</span>
               </div>
-              <span className="font-bold text-sm text-destructive">₹{totalPayrollExpense.toLocaleString()}</span>
+              <span className="font-bold text-sm text-amber-700 dark:text-amber-400 font-mono">₹{totalRentalExpense.toLocaleString()}</span>
+            </div>
+
+            {/* Staff & Crew Payroll Breakdown */}
+            <div className="p-2.5 rounded-xl bg-purple-500/[0.05] border border-purple-500/20 space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-foreground flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-purple-600" />
+                  Staff Wages & Crew Payroll
+                </span>
+                <span className="font-bold text-sm text-destructive font-mono">
+                  ₹{totalPayrollExpense.toLocaleString()}
+                </span>
+              </div>
+              <div className="pl-5 space-y-1 text-[11px] text-muted-foreground">
+                <div className="flex justify-between">
+                  <span>· Supervisors (Base & Overtime):</span>
+                  <span className="font-medium text-foreground">₹{payrollData.supervisorTotal.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>· Drivers (Base & Transit Runs):</span>
+                  <span className="font-medium text-foreground">₹{payrollData.driverTotal.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>· Site Crew & Trade Wages (Painters, Plumbers, Helpers):</span>
+                  <span className="font-medium text-foreground">₹{payrollData.crewTotal.toLocaleString()}</span>
+                </div>
+                {totalPaidPayroll > 0 && (
+                  <div className="flex justify-between pt-1 border-t border-purple-500/20 text-emerald-600 dark:text-emerald-400 font-semibold">
+                    <span>✓ Actual Settled & Disbursed in Period:</span>
+                    <span>₹{totalPaidPayroll.toLocaleString()}</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-muted/40">
@@ -593,6 +998,84 @@ export const ReportsTab = () => {
         </Card>
       </div>
 
+      {/* Detailed Staff & Crew Payroll Ledger Card */}
+      <Card className="p-4 rounded-2xl bg-card border border-border/60 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-border/40">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-primary" />
+            <h4 className="font-heading font-bold text-sm text-foreground">
+              Itemized Staff & Crew Payroll Breakdown ({payrollData.staffCards.length})
+            </h4>
+          </div>
+          <div className="text-xs text-muted-foreground flex items-center gap-3">
+            <span>Total Incurred: <strong className="text-foreground">₹{totalPayrollExpense.toLocaleString()}</strong></span>
+            {totalPaidPayroll > 0 && (
+              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                Settled: <strong>₹{totalPaidPayroll.toLocaleString()}</strong>
+              </span>
+            )}
+          </div>
+        </div>
+
+        {payrollData.staffCards.length === 0 ? (
+          <div className="text-center py-8 bg-muted/20 rounded-xl text-muted-foreground text-xs border border-dashed border-border/50">
+            No payroll or attendance wages recorded for this period & scope.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {payrollData.staffCards.map(staff => {
+                const isPaid = paidHistoryRecords.some(h => h.staffId === staff.id);
+
+                return (
+                  <div
+                    key={staff.id}
+                    className="p-3 bg-muted/25 hover:bg-muted/40 rounded-xl border border-border/50 space-y-2 transition-all shadow-2xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-xs text-foreground flex items-center gap-1.5 flex-wrap">
+                          <span>{staff.name}</span>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${
+                            staff.category === 'supervisor'
+                              ? 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/30'
+                              : staff.category === 'driver'
+                              ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30'
+                              : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                          }`}>
+                            {staff.category === 'supervisor' ? 'Supervisor' : staff.category === 'driver' ? 'Driver' : 'Site Crew'}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{staff.role}</span>
+                      </div>
+
+                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${
+                        isPaid
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                          : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                      }`}>
+                        {isPaid ? '✓ PAID' : '⏳ PENDING'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-border/30">
+                      <div>
+                        <span>{staff.days} Days</span>
+                        {staff.otHours > 0 && <span className="text-amber-600"> · {staff.otHours}h OT</span>}
+                        {staff.extraPay > 0 && <span className="text-blue-600"> · +₹{staff.extraPay}</span>}
+                      </div>
+                      <span className="font-heading font-extrabold text-xs text-foreground">
+                        ₹{staff.totalEarned.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </Card>
+
       {/* Manual Expenses Section */}
       <div className="mt-8 space-y-4">
         <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -622,6 +1105,20 @@ export const ReportsTab = () => {
               <div className="space-y-1.5">
                 <Label className="text-xs">Amount (₹)</Label>
                 <Input type="number" value={expenseAmount} onChange={e => setExpenseAmount(e.target.value)} required min="1" className="h-9 text-xs" placeholder="e.g. 500" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Payment Method</Label>
+                <Select value={expensePaymentMethod} onValueChange={(val: any) => setExpensePaymentMethod(val)}>
+                  <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Payment Mode" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Cash">💵 Cash</SelectItem>
+                    <SelectItem value="UPI">📱 UPI / GPay / PhonePe</SelectItem>
+                    <SelectItem value="Bank Transfer">🏦 Bank Transfer</SelectItem>
+                    <SelectItem value="Cheque">📝 Cheque</SelectItem>
+                    <SelectItem value="Card">💳 Card</SelectItem>
+                    <SelectItem value="Other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Description</Label>
@@ -654,11 +1151,20 @@ export const ReportsTab = () => {
                 {filteredManualExpenses.map((exp) => (
                   <div key={exp.id} className="flex flex-col sm:flex-row justify-between p-3 bg-muted/30 rounded-xl border border-border/50 gap-3">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-sm text-foreground">{exp.category}</span>
                         <span className="text-[10px] text-muted-foreground font-mono bg-background px-1.5 py-0.5 rounded border border-border/30">
                           {format(new Date(exp.date), 'dd MMM yyyy')}
                         </span>
+                        {exp.paymentMethod && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
+                            {exp.paymentMethod === 'Cash' ? '💵 Cash' :
+                             exp.paymentMethod === 'UPI' ? '📱 UPI' :
+                             exp.paymentMethod === 'Bank Transfer' ? '🏦 Bank Transfer' :
+                             exp.paymentMethod === 'Cheque' ? '📝 Cheque' :
+                             exp.paymentMethod === 'Card' ? '💳 Card' : exp.paymentMethod}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-muted-foreground mt-1.5">
                         {exp.description || 'No description'}

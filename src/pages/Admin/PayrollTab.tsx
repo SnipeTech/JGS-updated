@@ -114,6 +114,15 @@ export const PayrollTab = () => {
   const [payRef, setPayRef] = useState('');
   const [payNote, setPayNote] = useState('');
 
+  // Bulk Payment Modal State ("Mark All Paid")
+  const [bulkPayModalOpen, setBulkPayModalOpen] = useState(false);
+  const [bulkSelectedStaffIds, setBulkSelectedStaffIds] = useState<string[]>([]);
+  const [bulkPayMode, setBulkPayMode] = useState<'Cash' | 'Bank Transfer' | 'UPI' | 'Cheque'>('Cash');
+  const [bulkPayRef, setBulkPayRef] = useState('');
+  const [bulkPayNote, setBulkPayNote] = useState('');
+  const [bulkPayDate, setBulkPayDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [bulkFilterType, setBulkFilterType] = useState<'all' | 'supervisor' | 'driver' | 'crew'>('all');
+
   // Detailed Attendance Modal State
   const [selectedStaffAttendance, setSelectedStaffAttendance] = useState<any | null>(null);
 
@@ -251,45 +260,111 @@ export const PayrollTab = () => {
     toast.info('Payment revoked and status reset to PENDING');
   };
 
-  // Mark all pending as paid
-  const markAllAsPaid = () => {
-    const paidAtFormatted = format(new Date(), 'dd MMM yyyy, hh:mm a');
-    const newRecords: SalaryPaymentRecord[] = [];
-    const updatedStatus = { ...paidStatusMap };
+  // Helper to extract detailed type and display info for any payroll recipient
+  const getRecipientTypeInfo = (p: any) => {
+    if (p.isCrewTeam) {
+      const parts = [
+        p.painterDays > 0 ? `${p.painterDays}d Painters` : null,
+        p.plumberDays > 0 ? `${p.plumberDays}d Plumbers` : null,
+        p.labourDays > 0 ? `${p.labourDays}d Helpers` : null,
+      ].filter(Boolean);
+      return {
+        type: 'crew' as const,
+        typeLabel: 'Site Crew Team',
+        badgeColor: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
+        icon: <HardHat className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />,
+        subtext: parts.length > 0 ? parts.join(' · ') : 'Managed Site Crew Team'
+      };
+    }
+    const r = (p.role || '').toLowerCase();
+    if (r === 'supervisor') {
+      return {
+        type: 'supervisor' as const,
+        typeLabel: 'Supervisor',
+        badgeColor: 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30',
+        icon: <UserCircle className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />,
+        subtext: p.phone ? `Phone: ${p.phone}` : 'Site Supervisor'
+      };
+    }
+    if (r === 'driver') {
+      return {
+        type: 'driver' as const,
+        typeLabel: 'Driver',
+        badgeColor: 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30',
+        icon: <Truck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />,
+        subtext: p.totalDriverTrips > 0 ? `${p.totalDriverTrips} delivery runs` : 'Fleet Driver'
+      };
+    }
+    return {
+      type: 'crew' as const,
+      typeLabel: p.role ? p.role.toUpperCase() : 'Site Worker',
+      badgeColor: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+      icon: <Users className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />,
+      subtext: `Trade: ${p.role || 'Crew'}`
+    };
+  };
 
-    // Include standard staff and crew teams
-    allCards.forEach(p => {
-      const key = getPaidKey(p.id);
-      if (!updatedStatus[key]) {
-        updatedStatus[key] = true;
-        newRecords.push({
-          id: `pay_${Date.now()}_${p.id}_${Math.floor(Math.random() * 1000)}`,
-          staffId: p.id,
-          staffName: p.name,
-          role: p.role,
-          periodType: filterType,
-          periodLabel,
-          fromDate,
-          toDate,
-          daysWorked: p.presentDays + (p.halfDays * 0.5),
-          otHours: p.totalOtHours,
-          basePay: p.basePay,
-          otPay: p.otPay,
-          extraPay: p.transitPay || p.crewPay || 0,
-          totalAmount: p.totalEarned,
-          paidAt: paidAtFormatted,
-          paymentMode: 'Cash',
-          notes: 'Bulk payout marked by Admin',
-          paidBy: 'Admin',
-          category: p.isCrewTeam ? 'crew' : 'staff'
-        });
-      }
-    });
-
-    if (newRecords.length === 0) {
+  // Open bulk payment dialog ("Mark All Paid")
+  const openBulkPayModal = () => {
+    const pending = allCards.filter(p => !isStaffPaid(p.id));
+    if (pending.length === 0) {
       toast.info('All entries for this period are already marked as PAID');
       return;
     }
+    setBulkSelectedStaffIds(pending.map(p => p.id));
+    setBulkPayMode('Cash');
+    setBulkPayRef('');
+    setBulkPayNote(`Bulk payroll settlement - ${periodLabel}`);
+    setBulkPayDate(format(new Date(), 'yyyy-MM-dd'));
+    setBulkFilterType('all');
+    setBulkPayModalOpen(true);
+  };
+
+  // Confirm bulk payment
+  const confirmBulkPayment = () => {
+    const pendingToPay = allCards.filter(p => !isStaffPaid(p.id) && bulkSelectedStaffIds.includes(p.id));
+    if (pendingToPay.length === 0) {
+      toast.error('Please select at least one recipient to mark as paid');
+      return;
+    }
+
+    let paidTime = format(new Date(), 'hh:mm a');
+    let paidDateStr = bulkPayDate;
+    try {
+      paidDateStr = format(new Date(bulkPayDate + 'T00:00:00'), 'dd MMM yyyy');
+    } catch {}
+    const paidAtFormatted = `${paidDateStr}, ${paidTime}`;
+
+    const newRecords: SalaryPaymentRecord[] = [];
+    const updatedStatus = { ...paidStatusMap };
+
+    pendingToPay.forEach(p => {
+      const key = getPaidKey(p.id);
+      updatedStatus[key] = true;
+
+      newRecords.push({
+        id: `pay_${Date.now()}_${p.id}_${Math.floor(Math.random() * 1000)}`,
+        staffId: p.id,
+        staffName: p.name,
+        role: p.role,
+        periodType: filterType,
+        periodLabel,
+        fromDate,
+        toDate,
+        daysWorked: p.presentDays + (p.halfDays * 0.5),
+        otHours: p.totalOtHours,
+        basePay: p.basePay,
+        otPay: p.otPay,
+        extraPay: p.transitPay || p.crewPay || 0,
+        totalAmount: p.totalEarned,
+        paidAt: paidAtFormatted,
+        paymentMode: bulkPayMode,
+        referenceNo: bulkPayRef.trim() || undefined,
+        notes: bulkPayNote.trim() || undefined,
+        paidBy: 'Admin',
+        category: p.isCrewTeam ? 'crew' : (p.role === 'driver' ? 'driver' : (p.role === 'supervisor' ? 'supervisor' : 'staff')) as any
+      });
+    });
 
     setPaidHistory(prev => {
       const next = [...newRecords, ...prev];
@@ -299,7 +374,9 @@ export const PayrollTab = () => {
 
     setPaidStatusMap(updatedStatus);
     localStorage.setItem('edamari_payroll_paid', JSON.stringify(updatedStatus));
-    toast.success(`Marked all ${newRecords.length} payouts as PAID and recorded in History!`);
+    const totalDisbursed = pendingToPay.reduce((s, p) => s + p.totalEarned, 0);
+    toast.success(`Marked ${newRecords.length} payouts as PAID (₹${totalDisbursed.toLocaleString()}) and recorded in History!`);
+    setBulkPayModalOpen(false);
   };
 
   // 1. STANDARD STAFF PAYROLL (Supervisors, Drivers, and Registered Crew Staff)
@@ -324,6 +401,7 @@ export const PayrollTab = () => {
         let basePay = 0;
         let otPay = 0;
         let transitPay = 0;
+        let petrolExpense = 0;
         let supervisorCrewPay = 0;
         let totalDriverTrips = 0;
 
@@ -343,6 +421,7 @@ export const PayrollTab = () => {
           otHours: number;
           otPay: number;
           transitPay: number;
+          petrolExpense: number;
           crewPay: number;
           tripCount: number;
           dayTotal: number;
@@ -380,26 +459,27 @@ export const PayrollTab = () => {
             // Driver transit runs on this day
             let dayTrips: any[] = [];
             let dayTransit = 0;
+            let dayPetrol = 0;
             if (isDrv) {
               dayTrips = (materialRequests || []).filter(
                 r => (r.driverId === staff.id || r.driverName?.toLowerCase() === staff.name.toLowerCase()) &&
                      (r.date === att.date || r.createdAt?.startsWith(att.date))
               );
-              dayTransit = dayTrips.reduce((sum, r) => sum + (r.driverCost || 0), 0);
+              dayTransit = dayTrips.reduce((sum, r) => sum + (Number(r.driverWage) || 0), 0);
+              dayPetrol = dayTrips.reduce((sum, r) => sum + (Number(r.petrolCharge) || 0), 0);
               totalDriverTrips += dayTrips.length;
             }
 
             // Supervisor under-labour crew count on this day
             let dayCrew = 0;
-            if (isSup && att.presentCounts) {
-              const unCount =
-                (att.presentCounts.painter || 0) +
-                (att.presentCounts.plumber || 0) +
-                (att.presentCounts.labour || 0);
+            if (isSup && (att.presentCounts || att.halfDayCounts)) {
+              const fullCount = Object.values(att.presentCounts || {}).reduce((sum, c) => sum + (c || 0), 0);
+              const halfCount = Object.values(att.halfDayCounts || {}).reduce((sum, c) => sum + (c || 0), 0);
+              const unCount = fullCount + halfCount;
               const crewSalaryRate = staff.underLabourSalary || 700;
               const crewOtRate = staff.underLabourOT || 100;
 
-              const unDaily = unCount * crewSalaryRate;
+              const unDaily = (fullCount * crewSalaryRate) + (halfCount * (crewSalaryRate / 2));
               const unOtStaff =
                 att.unnamedOtStaffCount !== undefined
                   ? att.unnamedOtStaffCount
@@ -413,6 +493,7 @@ export const PayrollTab = () => {
             basePay += dayBase;
             otPay += dayOt;
             transitPay += dayTransit;
+            petrolExpense += dayPetrol;
             supervisorCrewPay += dayCrew;
             totalOtHours += dayOtHours;
 
@@ -431,9 +512,10 @@ export const PayrollTab = () => {
               otHours: dayOtHours,
               otPay: dayOt,
               transitPay: dayTransit,
+              petrolExpense: dayPetrol,
               crewPay: dayCrew,
               tripCount: dayTrips.length,
-              dayTotal: dayBase + dayOt + dayTransit,
+              dayTotal: dayBase + dayOt + dayTransit + dayPetrol,
               siteName: matchingLog?.siteName || (isDrv ? 'Logistics Delivery' : 'Site Operation'),
               workDescription: matchingLog?.notes,
               notes: att.notes,
@@ -455,6 +537,7 @@ export const PayrollTab = () => {
               otHours: 0,
               otPay: 0,
               transitPay: 0,
+              petrolExpense: 0,
               crewPay: 0,
               tripCount: 0,
               dayTotal: 0,
@@ -480,8 +563,10 @@ export const PayrollTab = () => {
           tripsInPeriod.forEach(t => {
             const tripDate = t.date || t.createdAt?.substring(0, 10);
             if (tripDate && !breakdown.some(b => b.date === tripDate)) {
-              const tripCost = t.driverCost || 0;
-              transitPay += tripCost;
+              const tripWage = Number(t.driverWage) || 0;
+              const tripPetrol = Number(t.petrolCharge) || 0;
+              transitPay += tripWage;
+              petrolExpense += tripPetrol;
               totalDriverTrips += 1;
               breakdown.push({
                 date: tripDate,
@@ -489,10 +574,11 @@ export const PayrollTab = () => {
                 base: 0,
                 otHours: 0,
                 otPay: 0,
-                transitPay: tripCost,
+                transitPay: tripWage,
+                petrolExpense: tripPetrol,
                 crewPay: 0,
                 tripCount: 1,
-                dayTotal: tripCost,
+                dayTotal: tripWage + tripPetrol,
                 siteName: `Dispatch: ${t.siteName || 'Site'}`
               });
             }
@@ -517,6 +603,7 @@ export const PayrollTab = () => {
                 otHours: 0,
                 otPay: 0,
                 transitPay: 0,
+                petrolExpense: 0,
                 crewPay: 0,
                 tripCount: 0,
                 dayTotal: dailyBase,
@@ -527,7 +614,7 @@ export const PayrollTab = () => {
         }
 
         breakdown.sort((a, b) => b.date.localeCompare(a.date));
-        const totalEarned = isSup ? (basePay + otPay) : (basePay + otPay + transitPay);
+        const totalEarned = isSup ? (basePay + otPay) : (basePay + otPay + transitPay + petrolExpense);
 
         return {
           ...staff,
@@ -540,6 +627,7 @@ export const PayrollTab = () => {
           basePay,
           otPay,
           transitPay,
+          petrolExpense,
           crewPay: supervisorCrewPay,
           totalDriverTrips,
           totalEarned,
@@ -599,11 +687,21 @@ export const PayrollTab = () => {
           hasAdminEdits = true;
           if (att.editedByAdminName && !adminEditName) adminEditName = att.editedByAdminName;
         }
-        if (!att.presentCounts) return;
-        const p = att.presentCounts.painter || 0;
-        const pl = att.presentCounts.plumber || 0;
-        const l = att.presentCounts.labour || 0;
-        const dayHeadcount = p + pl + l;
+        if (!att.presentCounts && !att.halfDayCounts) return;
+        const pFull = att.presentCounts?.painter || 0;
+        const pHalf = att.halfDayCounts?.painter || 0;
+        const plFull = att.presentCounts?.plumber || 0;
+        const plHalf = att.halfDayCounts?.plumber || 0;
+        const lFull = att.presentCounts?.labour || 0;
+        const lHalf = att.halfDayCounts?.labour || 0;
+
+        const p = pFull + (pHalf * 0.5);
+        const pl = plFull + (plHalf * 0.5);
+        const l = lFull + (lHalf * 0.5);
+
+        const fullCount = Object.values(att.presentCounts || {}).reduce((sum, c) => sum + (c || 0), 0);
+        const halfCount = Object.values(att.halfDayCounts || {}).reduce((sum, c) => sum + (c || 0), 0);
+        const dayHeadcount = fullCount + halfCount;
 
         if (dayHeadcount === 0 && (!att.unnamedOtHours || att.unnamedOtHours === 0)) return;
 
@@ -611,7 +709,7 @@ export const PayrollTab = () => {
         totalPlumberManDays += pl;
         totalLabourManDays += l;
 
-        const dayCrewBase = dayHeadcount * crewRate;
+        const dayCrewBase = (fullCount * crewRate) + (halfCount * (crewRate / 2));
         const otHours = att.unnamedOtHours || 0;
         const otStaff =
           att.unnamedOtStaffCount !== undefined
@@ -704,6 +802,7 @@ export const PayrollTab = () => {
   const totalOtHours = allCards.reduce((s, p) => s + p.totalOtHours, 0);
   const totalOtPay = allCards.reduce((s, p) => s + p.otPay, 0);
   const totalTransitPay = allCards.reduce((s, p) => s + (p.transitPay || 0), 0);
+  const totalPetrolExpense = allCards.reduce((s, p) => s + (p.petrolExpense || 0), 0);
   const totalPaid = allCards.filter(p => isStaffPaid(p.id)).reduce((s, p) => s + p.totalEarned, 0);
   const totalPending = totalPayroll - totalPaid;
 
@@ -796,7 +895,7 @@ export const PayrollTab = () => {
 
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 14, 18);
+    doc.text('JGS CONSTRUCTION & INTERIORS', 14, 18);
 
     doc.setFontSize(13);
     doc.setTextColor(40);
@@ -904,7 +1003,7 @@ export const PayrollTab = () => {
 
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 105, 20, { align: 'center' });
+    doc.text('JGS CONSTRUCTION & INTERIORS', 105, 20, { align: 'center' });
 
     doc.setFontSize(11);
     doc.setTextColor(100);
@@ -980,7 +1079,7 @@ export const PayrollTab = () => {
 
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 14, 18);
+    doc.text('JGS CONSTRUCTION & INTERIORS', 14, 18);
 
     doc.setFontSize(13);
     doc.setTextColor(40);
@@ -1079,7 +1178,7 @@ export const PayrollTab = () => {
 
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 105, 18, { align: 'center' });
+    doc.text('JGS CONSTRUCTION & INTERIORS', 105, 18, { align: 'center' });
 
     doc.setFontSize(12);
     doc.setTextColor(40);
@@ -1339,10 +1438,15 @@ export const PayrollTab = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={markAllAsPaid}
+                    onClick={openBulkPayModal}
                     className="h-8 rounded-xl text-xs font-bold gap-1.5 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" /> Mark All Paid
+                    {allCards.filter(p => !isStaffPaid(p.id)).length > 0 && (
+                      <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-600 text-white font-extrabold">
+                        {allCards.filter(p => !isStaffPaid(p.id)).length}
+                      </span>
+                    )}
                   </Button>
                 )}
 
@@ -1668,6 +1772,11 @@ export const PayrollTab = () => {
                               Transit: +₹{p.transitPay.toLocaleString()}
                             </div>
                           )}
+                          {isDrv && p.petrolExpense > 0 && (
+                            <div className="text-amber-700 dark:text-amber-400">
+                              ⛽ Petrol: +₹{p.petrolExpense.toLocaleString()}
+                            </div>
+                          )}
                           {isSup && p.crewPay > 0 && (
                             <div className="text-amber-700 dark:text-amber-300 font-semibold">
                               Managed Crew: ₹{p.crewPay.toLocaleString()}
@@ -1824,6 +1933,7 @@ export const PayrollTab = () => {
                                     <span>· Base: ₹{b.base}</span>
                                     {b.otHours > 0 && <span className="text-amber-600">· {b.otHours}h OT (+₹{b.otPay})</span>}
                                     {b.transitPay > 0 && <span className="text-blue-600">· Transit (+₹{b.transitPay})</span>}
+                                    {b.petrolExpense > 0 && <span className="text-amber-700">· ⛽ Petrol (+₹{b.petrolExpense})</span>}
                                   </div>
                                 </div>
 
@@ -2204,6 +2314,377 @@ export const PayrollTab = () => {
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: BULK PAYOUT / "MARK ALL PAID" WITH RECIPIENT TYPE BREAKDOWN        */}
+      {/* ========================================================================= */}
+      {bulkPayModalOpen && (() => {
+        const allPendingCards = allCards.filter(p => !isStaffPaid(p.id));
+        const displayedPendingCards = allPendingCards.filter(p => {
+          if (bulkFilterType === 'all') return true;
+          if (bulkFilterType === 'supervisor') return !p.isCrewTeam && p.role === 'supervisor';
+          if (bulkFilterType === 'driver') return !p.isCrewTeam && p.role === 'driver';
+          if (bulkFilterType === 'crew') return p.isCrewTeam || (p.role !== 'supervisor' && p.role !== 'driver');
+          return true;
+        });
+
+        const totalPendingAmount = allPendingCards.reduce((s, p) => s + p.totalEarned, 0);
+        const selectedCards = allPendingCards.filter(p => bulkSelectedStaffIds.includes(p.id));
+        const selectedTotalAmount = selectedCards.reduce((s, p) => s + p.totalEarned, 0);
+
+        const pendingSupervisors = allPendingCards.filter(p => !p.isCrewTeam && p.role === 'supervisor');
+        const pendingDrivers = allPendingCards.filter(p => !p.isCrewTeam && p.role === 'driver');
+        const pendingCrewTeams = allPendingCards.filter(p => p.isCrewTeam);
+        const pendingTradeCrew = allPendingCards.filter(p => !p.isCrewTeam && p.role !== 'supervisor' && p.role !== 'driver');
+
+        const toggleSelectAll = (select: boolean) => {
+          if (select) {
+            setBulkSelectedStaffIds(allPendingCards.map(p => p.id));
+          } else {
+            setBulkSelectedStaffIds([]);
+          }
+        };
+
+        const toggleSelectCategory = (cat: 'crew' | 'staff') => {
+          if (cat === 'crew') {
+            const crewIds = allPendingCards.filter(p => p.isCrewTeam || (p.role !== 'supervisor' && p.role !== 'driver')).map(p => p.id);
+            setBulkSelectedStaffIds(crewIds);
+          } else {
+            const staffIds = allPendingCards.filter(p => !p.isCrewTeam && (p.role === 'supervisor' || p.role === 'driver')).map(p => p.id);
+            setBulkSelectedStaffIds(staffIds);
+          }
+        };
+
+        const toggleStaffSelection = (id: string) => {
+          setBulkSelectedStaffIds(prev =>
+            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+          );
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="bg-card w-full max-w-3xl rounded-3xl border border-border shadow-2xl overflow-hidden my-auto animate-scale-in max-h-[92vh] flex flex-col">
+              {/* Modal Header */}
+              <div className="p-4 border-b border-border/50 flex items-center justify-between bg-muted/30 shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/20">
+                    <Wallet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-heading font-extrabold text-base text-foreground flex items-center gap-2">
+                      Mark All Pending Payouts as Paid
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">
+                        {allPendingCards.length} Pending
+                      </span>
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Period: <strong className="text-foreground">{periodLabel}</strong> • Review recipient types and confirm disbursement details.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setBulkPayModalOpen(false)}
+                  className="h-8 w-8 rounded-xl"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              {/* Scrollable Body */}
+              <div className="p-4 space-y-4 overflow-y-auto flex-1 text-xs">
+                {/* 1. Summary Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  <div className="p-3 bg-muted/40 rounded-2xl border border-border/40">
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground block">Total Pending Wording</span>
+                    <span className="text-base font-extrabold text-foreground mt-0.5 block">
+                      ₹{totalPendingAmount.toLocaleString()}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      Across {allPendingCards.length} pending disbursements
+                    </span>
+                  </div>
+
+                  <div className="p-3 bg-emerald-500/10 rounded-2xl border border-emerald-500/20">
+                    <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 block">Selected for Payment</span>
+                    <span className="text-base font-extrabold text-emerald-600 dark:text-emerald-400 mt-0.5 block">
+                      ₹{selectedTotalAmount.toLocaleString()}
+                    </span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                      {selectedCards.length} of {allPendingCards.length} recipients selected
+                    </span>
+                  </div>
+
+                  <div className="p-3 bg-card rounded-2xl border border-border/40 col-span-2 sm:col-span-1">
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground block">Recipient Breakdown</span>
+                    <div className="text-[11px] text-muted-foreground mt-1 space-y-0.5">
+                      <div className="flex justify-between">
+                        <span>Supervisors:</span>
+                        <span className="font-bold text-foreground">{pendingSupervisors.length} (₹{pendingSupervisors.reduce((s, p) => s + p.totalEarned, 0).toLocaleString()})</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Drivers:</span>
+                        <span className="font-bold text-foreground">{pendingDrivers.length} (₹{pendingDrivers.reduce((s, p) => s + p.totalEarned, 0).toLocaleString()})</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Crew & Trades:</span>
+                        <span className="font-bold text-foreground">{pendingCrewTeams.length + pendingTradeCrew.length} (₹{(pendingCrewTeams.reduce((s, p) => s + p.totalEarned, 0) + pendingTradeCrew.reduce((s, p) => s + p.totalEarned, 0)).toLocaleString()})</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Payment Configuration */}
+                <div className="p-3.5 bg-card rounded-2xl border border-border/60 shadow-2xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Disbursement Details
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      Mode: <strong className="text-foreground">{bulkPayMode}</strong>
+                    </span>
+                  </div>
+
+                  {/* Payment Mode Selector */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'Cash' as const, label: '💵 Cash', desc: 'Handed in cash' },
+                      { id: 'UPI' as const, label: '📱 UPI / GPay', desc: 'GPay / PhonePe' },
+                      { id: 'Bank Transfer' as const, label: '🏛️ Bank Transfer', desc: 'NEFT / RTGS' },
+                      { id: 'Cheque' as const, label: '📄 Cheque', desc: 'Issued cheque' },
+                    ].map(m => (
+                      <button
+                        type="button"
+                        key={m.id}
+                        onClick={() => setBulkPayMode(m.id)}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          bulkPayMode === m.id
+                            ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold shadow-2xs'
+                            : 'border-border/60 bg-muted/20 hover:bg-muted/50 text-foreground'
+                        }`}
+                      >
+                        <p className="text-xs font-bold">{m.label}</p>
+                        <p className="text-[10px] text-muted-foreground">{m.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                    <div>
+                      <Label className="text-[10px] uppercase font-bold text-muted-foreground">Payment Date</Label>
+                      <Input
+                        type="date"
+                        value={bulkPayDate}
+                        onChange={e => setBulkPayDate(e.target.value)}
+                        className="h-8 text-xs rounded-xl mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] uppercase font-bold text-muted-foreground">Reference / Transaction / Cheque #</Label>
+                      <Input
+                        placeholder="e.g. NEFT-99120 or Cheque #4019"
+                        value={bulkPayRef}
+                        onChange={e => setBulkPayRef(e.target.value)}
+                        className="h-8 text-xs rounded-xl mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] uppercase font-bold text-muted-foreground">Payment Notes</Label>
+                      <Input
+                        placeholder="e.g. October payroll settlement"
+                        value={bulkPayNote}
+                        onChange={e => setBulkPayNote(e.target.value)}
+                        className="h-8 text-xs rounded-xl mt-1"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Recipient Type Filter & Selection Controls */}
+                <div className="space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    {/* Role Filter Tabs */}
+                    <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar">
+                      {[
+                        { id: 'all' as const, label: `All Types (${allPendingCards.length})` },
+                        { id: 'supervisor' as const, label: `Supervisors (${pendingSupervisors.length})` },
+                        { id: 'driver' as const, label: `Drivers (${pendingDrivers.length})` },
+                        { id: 'crew' as const, label: `Site Crew (${pendingCrewTeams.length + pendingTradeCrew.length})` },
+                      ].map(tab => (
+                        <button
+                          key={tab.id}
+                          onClick={() => setBulkFilterType(tab.id)}
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                            bulkFilterType === tab.id
+                              ? 'bg-primary text-white font-bold shadow-xs'
+                              : 'bg-muted/50 text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Quick selection shortcuts */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => toggleSelectAll(true)}
+                        className="h-7 px-2 text-[11px] rounded-lg"
+                      >
+                        Select All
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => toggleSelectAll(false)}
+                        className="h-7 px-2 text-[11px] rounded-lg text-muted-foreground"
+                      >
+                        Clear
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => toggleSelectCategory('crew')}
+                        className="h-7 px-2 text-[11px] rounded-lg text-amber-700 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+                      >
+                        Only Crew
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => toggleSelectCategory('staff')}
+                        className="h-7 px-2 text-[11px] rounded-lg text-blue-700 dark:text-blue-400 border-blue-500/30 hover:bg-blue-500/10"
+                      >
+                        Only Staff
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* 4. Interactive List of Recipients with Type Information */}
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {displayedPendingCards.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-muted-foreground border border-dashed rounded-xl bg-muted/10">
+                        No pending payouts match this filter.
+                      </div>
+                    ) : (
+                      displayedPendingCards.map(p => {
+                        const isSelected = bulkSelectedStaffIds.includes(p.id);
+                        const typeInfo = getRecipientTypeInfo(p);
+
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => toggleStaffSelection(p.id)}
+                            className={`p-3 rounded-2xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                              isSelected
+                                ? 'border-emerald-500/40 bg-emerald-500/5 shadow-2xs'
+                                : 'border-border/50 bg-card opacity-60 hover:opacity-100 hover:border-border'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              {/* Custom checkbox */}
+                              <div className={`w-5 h-5 rounded-md flex items-center justify-center mt-0.5 shrink-0 transition-colors ${
+                                isSelected ? 'bg-emerald-600 text-white' : 'border border-border bg-muted/40'
+                              }`}>
+                                {isSelected && <Check className="w-3.5 h-3.5" />}
+                              </div>
+
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-xs text-foreground">{p.name}</span>
+                                  {/* Distinct Type Badge */}
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 ${typeInfo.badgeColor}`}>
+                                    {typeInfo.icon}
+                                    {typeInfo.typeLabel}
+                                  </span>
+                                  {p.role && !p.isCrewTeam && p.role !== 'supervisor' && p.role !== 'driver' && (
+                                    <span className="text-[10px] text-muted-foreground font-semibold">
+                                      ({p.role})
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-2">
+                                  <span className="font-medium">{typeInfo.subtext}</span>
+                                  <span>·</span>
+                                  <span>{p.presentDays} Full Days{p.halfDays > 0 ? `, ${p.halfDays} Half Days` : ''}</span>
+                                  {p.totalOtHours > 0 && (
+                                    <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                                      · {p.totalOtHours}h OT (+₹{p.otPay.toLocaleString()})
+                                    </span>
+                                  )}
+                                  {p.role === 'driver' && p.totalDriverTrips > 0 && (
+                                    <span className="text-blue-600 dark:text-blue-400">
+                                      · {p.totalDriverTrips} Runs
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Financial itemization & Net Payout */}
+                            <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-border/40 pl-8 sm:pl-0">
+                              <div className="text-right text-[11px] text-muted-foreground">
+                                <div>Base: ₹{p.basePay.toLocaleString()}</div>
+                                {(p.transitPay > 0 || p.petrolExpense > 0 || p.crewPay > 0) && (
+                                  <div className="text-blue-600">
+                                    Extra: +₹{((p.transitPay || 0) + (p.petrolExpense || 0) + (p.crewPay || 0)).toLocaleString()}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-heading font-extrabold text-emerald-600 dark:text-emerald-400 block">
+                                  ₹{p.totalEarned.toLocaleString()}
+                                </span>
+                                <span className="text-[9px] uppercase font-bold text-muted-foreground">
+                                  Net Payable
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 border-t border-border/50 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                <div className="text-xs text-muted-foreground text-center sm:text-left">
+                  Selected <strong className="text-foreground">{selectedCards.length}</strong> of {allPendingCards.length} recipients • Total:{' '}
+                  <strong className="text-emerald-600 dark:text-emerald-400 font-bold text-sm">
+                    ₹{selectedTotalAmount.toLocaleString()}
+                  </strong>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setBulkPayModalOpen(false)}
+                    className="h-9 rounded-xl text-xs flex-1 sm:flex-none"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={confirmBulkPayment}
+                    disabled={selectedCards.length === 0}
+                    className="h-9 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 shadow-sm flex-1 sm:flex-none"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Confirm & Mark {selectedCards.length} as PAID (₹{selectedTotalAmount.toLocaleString()})
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ========================================================================= */}
       {/* MODAL: DETAILED ATTENDANCE & TIMESHEET SHEET                              */}

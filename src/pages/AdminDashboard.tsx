@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
 import {
   LogOut, LayoutDashboard, MapPin, Users, CalendarDays,
-  UserCircle, FileText, BarChart3, Wallet, Package, Sofa,
-  ChevronRight, ArrowLeftRight, ShieldCheck, Sparkles
+  UserCircle, FileText, BarChart3, Wallet, Package,
+  ChevronRight, ArrowLeftRight, ShieldCheck, Sparkles, Truck
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -18,23 +18,26 @@ import { CustomersTab } from './Admin/CustomersTab';
 import { ReportsTab } from './Admin/ReportsTab';
 import { PayrollTab } from './Admin/PayrollTab';
 import { MaterialsSuppliersTab } from './Admin/MaterialsSuppliersTab';
+import { VehiclesTab } from './Admin/VehiclesTab';
 import { SettingsTab } from './Admin/SettingsTab';
 
 export type TabId =
   | 'dashboard'
   | 'sites'
+  | 'materials'
+  | 'vehicles'
   | 'staff'
   | 'attendance'
   | 'customers'
   | 'reports'
   | 'payroll'
-  | 'materials'
   | 'settings';
 
 export const ALL_NAV_ITEMS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: 'sites', label: 'Sites', icon: <MapPin className="w-4 h-4" /> },
   { id: 'materials', label: 'Materials & Suppliers', icon: <Package className="w-4 h-4" /> },
+  { id: 'vehicles', label: 'Vehicles & Fuel', icon: <Truck className="w-4 h-4" /> },
   { id: 'settings', label: 'Settings & Master Data', icon: <ShieldCheck className="w-4 h-4" /> },
   { id: 'payroll', label: 'Payroll & Salaries', icon: <Wallet className="w-4 h-4" /> },
   { id: 'staff', label: 'Staff Management', icon: <Users className="w-4 h-4" /> },
@@ -71,14 +74,31 @@ const AdminDashboard = () => {
   }, []);
 
   const NAV_ITEMS = ALL_NAV_ITEMS.filter(item => {
-    if (currentUser?.id === 'admin') return true; // Superadmin
-    if (currentUser?.adminPermissions && currentUser.adminPermissions.length > 0) {
+    if (currentUser?.id === 'admin') return true; // Superadmin always has full access
+    if (Array.isArray(currentUser?.adminPermissions)) {
       return currentUser.adminPermissions.includes(item.id);
     }
-    return true; // Default all access if no permissions defined
+    return true; // Default all access if permissions array not set
   });
 
+  // Automatically adjust activeTab if the current tab is not permitted
+  useEffect(() => {
+    if (NAV_ITEMS.length > 0 && !NAV_ITEMS.some(n => n.id === activeTab)) {
+      setActiveTab(NAV_ITEMS[0].id);
+    }
+  }, [NAV_ITEMS, activeTab]);
+
   const renderTab = () => {
+    if (currentUser?.id !== 'admin' && Array.isArray(currentUser?.adminPermissions) && !NAV_ITEMS.some(n => n.id === activeTab)) {
+      return (
+        <div className="p-8 text-center bg-card rounded-3xl border border-border/60 max-w-md mx-auto my-12 space-y-3">
+          <ShieldCheck className="w-12 h-12 text-destructive mx-auto" />
+          <h3 className="font-bold text-lg text-foreground">Access Restricted</h3>
+          <p className="text-xs text-muted-foreground">You do not have permission to access this section. Please contact the administrator.</p>
+        </div>
+      );
+    }
+
     switch (activeTab) {
       case 'dashboard':
         return <DashboardOverviewTab />;
@@ -96,6 +116,8 @@ const AdminDashboard = () => {
         return <PayrollTab />;
       case 'materials':
         return <MaterialsSuppliersTab />;
+      case 'vehicles':
+        return <VehiclesTab />;
       case 'settings':
         return <SettingsTab />;
     }
@@ -109,21 +131,17 @@ const AdminDashboard = () => {
       <aside className="hidden md:flex flex-col w-72 bg-[#121110] text-zinc-100 border-r border-amber-950/40 px-4 py-6 fixed h-full z-50 shadow-2xl">
         {/* Brand Header */}
         <div className="flex items-center gap-3.5 mb-8 px-2 pb-5 border-b border-zinc-800/80">
-          <div
-            className="w-11 h-11 rounded-2xl flex items-center justify-center shadow-lg shrink-0 relative overflow-hidden"
-            style={{ background: 'linear-gradient(135deg, hsl(38 78% 45%), hsl(30 88% 52%))' }}
-          >
-            <div className="absolute inset-0 bg-white/20 backdrop-blur-[1px]" />
-            <Sofa className="w-6 h-6 text-white relative z-10" />
+          <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center shadow-lg shrink-0 overflow-hidden border border-white/20">
+            <img src="/jgs-logo.png" alt="JGS Construction" className="w-full h-full object-contain scale-[1.7]" />
           </div>
           <div>
             <div className="flex items-center gap-1.5">
               <h1 className="text-lg font-heading font-extrabold tracking-tight text-white leading-none">
-                JGS INTERIOR
+                JGS CONSTRUCTION
               </h1>
             </div>
             <p className="text-[9px] font-bold text-amber-400/90 tracking-[0.22em] uppercase mt-1">
-              Architecture & Studio
+              Construction & Interiors
             </p>
           </div>
         </div>
@@ -171,13 +189,15 @@ const AdminDashboard = () => {
         <div className="mt-auto pt-4 border-t border-zinc-800/80 space-y-3">
           <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-zinc-900/80 border border-zinc-800/80">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center font-heading font-bold text-white text-xs shadow-md">
-              AD
+              {currentUser?.name ? currentUser.name.slice(0, 3).toUpperCase() : 'JGS'}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-heading font-bold text-zinc-100 truncate">Administrator</p>
+              <p className="text-xs font-heading font-bold text-zinc-100 truncate">
+                {currentUser?.name || 'JGS'}
+              </p>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[10px] text-zinc-400 font-medium">System Lead</span>
+                <span className="text-[10px] text-zinc-400 font-medium">Administrator</span>
               </div>
             </div>
           </div>
@@ -198,14 +218,11 @@ const AdminDashboard = () => {
           {/* Mobile Header (Hidden on Desktop) */}
           <div className="flex md:hidden items-center justify-between mb-5 p-3 rounded-2xl bg-[#121110] text-zinc-100 border border-amber-950/40 shadow-lg animate-slide-up">
             <div className="flex items-center gap-3">
-              <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center shadow-md"
-                style={{ background: 'linear-gradient(135deg, hsl(38 78% 45%), hsl(30 88% 52%))' }}
-              >
-                <Sofa className="w-5 h-5 text-white" />
+              <div className="w-11 h-11 rounded-xl bg-white flex items-center justify-center shadow-md overflow-hidden shrink-0">
+                <img src="/jgs-logo.png" alt="JGS Construction" className="w-full h-full object-contain scale-[1.7]" />
               </div>
               <div>
-                <h1 className="text-base font-heading font-bold text-white leading-tight">JGS INTERIOR</h1>
+                <h1 className="text-base font-heading font-bold text-white leading-tight">JGS CONSTRUCTION</h1>
                 <p className="text-[10px] text-amber-400 font-semibold uppercase tracking-wider">{currentNav?.label}</p>
               </div>
             </div>

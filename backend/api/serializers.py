@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     Staff, Site, Customer, Product, Quotation, ManualExpense,
     Vendor, WorkEntry, DailyLog, Attendance, MaterialSetting,
-    MaterialRental, Supplier, Vehicle, MaterialRequest,
+    MaterialRental, Supplier, Vehicle, VehicleMaintenance, MaterialRequest,
     PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest
 )
 
@@ -88,6 +88,12 @@ class SupplierSerializer(serializers.ModelSerializer):
 class VehicleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vehicle
+        fields = '__all__'
+
+
+class VehicleMaintenanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VehicleMaintenance
         fields = '__all__'
 
 

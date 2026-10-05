@@ -5,14 +5,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
   Send, MapPin, Users, Package, Clock, Plus, Trash2,
   Bike, Bus, Car, Footprints, AlertCircle, Search, Sparkles,
-  Layers, CheckCircle2, SendHorizonal, Lock, Unlock, ShieldCheck, ArrowRight
+  Layers, CheckCircle2, SendHorizonal, Lock, Unlock, ShieldCheck, ArrowRight,
+  PenLine, X, IndianRupee, UserCheck
 } from 'lucide-react';
 import { Material, TransportMode, TRANSPORT_RATES, Site, Staff } from '@/types';
+import { getLabourTypeMeta } from './StaffAttendanceTab';
 
 interface WorkEntryTabProps {
   staff: Staff | undefined;
@@ -29,8 +32,13 @@ export const WorkEntryTab = ({
   onNavigateToMaterialRequest,
   onNavigateToAttendance
 }: WorkEntryTabProps) => {
-  const { addDailyLog, dailyLogs, staffList, attendances, sites, paymentStageMaster, stageCompletionRequests, addStageCompletionRequest, updateSite } = useApp();
+  const { addDailyLog, updateDailyLog, dailyLogs, staffList, attendances, sites, paymentStageMaster, stageCompletionRequests, addStageCompletionRequest, updateSite, labourTypes } = useApp();
   const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+  const effectiveLabourTypes = useMemo(() => {
+    if (labourTypes && labourTypes.length > 0) return labourTypes;
+    return ['painter', 'plumber', 'labour'];
+  }, [labourTypes]);
 
   // Attendances for today
   const todayAttendances = (attendances || []).filter(a => a.date === todayStr);
@@ -38,7 +46,7 @@ export const WorkEntryTab = ({
   // Staff's own attendance for today
   const myAtt = todayAttendances.find(a => a.staffId === staff?.id);
   const isSelfPresent = myAtt?.status === 'present' || myAtt?.status === 'half-day';
-  const availableCrew = myAtt?.presentCounts || { painter: 0, plumber: 0, labour: 0 };
+  const availableCrew = (myAtt?.presentCounts || {}) as Record<string, number>;
 
   const defaultSiteId = useMemo(() => {
     return myAtt?.siteId || localStorage.getItem('today_active_site_id') || (mySites.length > 0 ? mySites[0].id : '');
@@ -52,29 +60,188 @@ export const WorkEntryTab = ({
   const [hoursWorked, setHoursWorked] = useState('8');
   const [workDesc, setWorkDesc] = useState('');
   const [income, setIncome] = useState('');
-  const [workerCounts, setWorkerCounts] = useState({ painter: 0, plumber: 0, labour: 0 });
+  const [incomePaymentMethod, setIncomePaymentMethod] = useState<'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Card'>('Cash');
+  const [workerCounts, setWorkerCounts] = useState<Record<string, number>>({});
   const [selectedWorkLevel, setSelectedWorkLevel] = useState('');
   const [completionNote, setCompletionNote] = useState('');
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
 
-  // Auto-sync defaultSiteId if siteId is empty
+  // Selected Workers / Employees on Duty for this site
+  const [selectedWorkers, setSelectedWorkers] = useState<string[]>([]);
+
+  // Salary breakdown toggle
+  const [showSalaryBreakdown, setShowSalaryBreakdown] = useState(false);
+
+  // Edit Mode state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
+
+  // Check if today's work log already exists for this site
+  const todayLog = useMemo(() => {
+    if (!siteId) return undefined;
+    const myLog = (dailyLogs || []).find(l =>
+      l.siteId === siteId &&
+      l.date === todayStr &&
+      staff?.id && (l.staffId === staff.id || l.staffName === staff.name)
+    );
+    if (myLog) return myLog;
+    return (dailyLogs || []).find(l => l.siteId === siteId && l.date === todayStr);
+  }, [dailyLogs, siteId, todayStr, staff]);
+
+  // Pre-populate form when supervisor clicks Edit Entry
+  const startEditLog = (log: typeof todayLog) => {
+    if (!log) return;
+    setEditingLogId(log.id);
+    setWorkDesc(log.notes || '');
+    if (log.workerCounts && Object.values(log.workerCounts).some(v => (Number(v) || 0) > 0)) {
+      setWorkerCounts(log.workerCounts);
+    } else if (siteLabourAllocation?.counts) {
+      setWorkerCounts(siteLabourAllocation.counts);
+    }
+    setSelectedWorkers(log.workerIds || []);
+    const manualExpenses = (log.expenses || []).filter(
+      e => !e.itemName.includes('Supervisor Attendance Expense') && !e.itemName.includes('Supervisor Salary')
+    );
+    setExpenses(manualExpenses);
+    setIncome(log.incomeFromClient ? log.incomeFromClient.toString() : '');
+    setIncomePaymentMethod((log.incomePaymentMethod as any) || 'Cash');
+    if (log.workLevelStage) {
+      setSelectedWorkLevel(log.workLevelStage);
+    }
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setEditingLogId(null);
+  };
+
+  // Auto-sync siteId to supervisor's attendance assigned site for today
   useEffect(() => {
-    if (!siteId && defaultSiteId) {
+    const attSite = myAtt?.siteId || localStorage.getItem('today_active_site_id');
+    if (attSite && !editingLogId) {
+      if (siteId !== attSite) {
+        setSiteId(attSite);
+      }
+    } else if (!siteId && defaultSiteId) {
       setSiteId(defaultSiteId);
     }
-  }, [defaultSiteId, siteId]);
+  }, [myAtt?.siteId, defaultSiteId, editingLogId]);
 
-  // Auto-fill worker counts when siteId changes
-  useEffect(() => {
-    if (siteId && myAtt) {
-      const assignment = myAtt.siteAssignments?.find(sa => sa.siteId === siteId);
-      if (assignment) {
-        setWorkerCounts(assignment.counts);
-      } else if (availableCrew && (availableCrew.painter > 0 || availableCrew.plumber > 0 || availableCrew.labour > 0)) {
-        setWorkerCounts(availableCrew);
+  // Effective supervisor attendance (handles both supervisor logged in or staff under a supervisor)
+  const effectiveSupervisorAtt = useMemo(() => {
+    if (staff?.role === 'supervisor') return myAtt;
+    if (staff?.supervisorId) {
+      const sup = todayAttendances.find(a => a.staffId === staff.supervisorId);
+      if (sup) return sup;
+    }
+    return myAtt;
+  }, [staff, myAtt, todayAttendances]);
+
+  // Site labour allocation from Team Attendance for this site
+  const siteLabourAllocation = useMemo(() => {
+    const primaryAtt = effectiveSupervisorAtt || myAtt;
+    // 1. Direct match in supervisor's siteAssignments with positive counts
+    const directMatch = primaryAtt?.siteAssignments?.find(sa => sa.siteId === siteId);
+    if (directMatch && (
+      Object.values(directMatch.counts || {}).some(v => (Number(v) || 0) > 0) ||
+      Object.values(directMatch.halfDayCounts || {}).some(v => (Number(v) || 0) > 0)
+    )) {
+      return directMatch;
+    }
+
+    // 2. Check any attendance record for today that allocated labour to this site
+    for (const a of todayAttendances) {
+      const match = a.siteAssignments?.find(sa => sa.siteId === siteId);
+      if (match && (
+        Object.values(match.counts || {}).some(v => (Number(v) || 0) > 0) ||
+        Object.values(match.halfDayCounts || {}).some(v => (Number(v) || 0) > 0)
+      )) {
+        return match;
       }
     }
-  }, [siteId, myAtt, availableCrew]);
+
+    if (directMatch) return directMatch;
+
+    // 3. Fallback: if supervisor assigned this site as primary today and logged presentCounts
+    if (primaryAtt?.siteId === siteId && (primaryAtt?.presentCounts || primaryAtt?.halfDayCounts)) {
+      const hasPresent = Object.values(primaryAtt.presentCounts || {}).some(v => (Number(v) || 0) > 0);
+      const hasHalf = Object.values(primaryAtt.halfDayCounts || {}).some(v => (Number(v) || 0) > 0);
+      if (hasPresent || hasHalf) {
+        return {
+          siteId,
+          counts: primaryAtt.presentCounts || {},
+          halfDayCounts: primaryAtt.halfDayCounts || {}
+        };
+      }
+    }
+
+    return undefined;
+  }, [effectiveSupervisorAtt, myAtt, siteId, todayAttendances]);
+
+  // Strictly only the labour trades that were actually allocated in Team Attendance for this site
+  const allocatedLabourTypes = useMemo(() => {
+    if (siteLabourAllocation) {
+      const fullTrades = Object.entries(siteLabourAllocation.counts || {})
+        .filter(([_, v]) => (Number(v) || 0) > 0)
+        .map(([k]) => k);
+      const halfTrades = Object.entries(siteLabourAllocation.halfDayCounts || {})
+        .filter(([_, v]) => (Number(v) || 0) > 0)
+        .map(([k]) => k);
+      return Array.from(new Set([...fullTrades, ...halfTrades]));
+    }
+    return [];
+  }, [siteLabourAllocation]);
+
+  // Auto-fill worker counts when siteId changes (strictly from Team Attendance site allocation)
+  useEffect(() => {
+    if (siteId && !todayLog && !isEditing) {
+      if (siteLabourAllocation?.counts) {
+        setWorkerCounts(siteLabourAllocation.counts);
+      } else {
+        setWorkerCounts({});
+      }
+    }
+  }, [siteId, siteLabourAllocation, todayLog, isEditing]);
+
+  // Auto-sync assigned workers when site changes or team attendance changes
+  useEffect(() => {
+    if (!siteId || isEditing) return;
+
+    // If today's log already exists and has saved workerIds, use those
+    if (todayLog && todayLog.workerIds && todayLog.workerIds.length > 0) {
+      setSelectedWorkers(todayLog.workerIds);
+      return;
+    }
+
+    // Otherwise (no log yet, or log exists but has no workerIds), auto-detect from attendance
+    const currentSite = sites.find(s => s.id === siteId);
+
+    // 1. Staff whose attendance today is allocated to this site
+    const todaySiteStaff = todayAttendances
+      .filter(a => a.siteId === siteId && a.status !== 'absent')
+      .map(a => a.staffId);
+
+    // 2. Team members under this supervisor who are present and not on another site
+    const myTeamStaff = staffList
+      .filter(s => s.supervisorId === staff?.id && s.id !== staff?.id)
+      .filter(s => {
+        const a = todayAttendances.find(att => att.staffId === s.id);
+        if (a?.status === 'absent') return false;
+        if (a?.siteId && a.siteId !== siteId) return false;
+        return true;
+      })
+      .map(s => s.id);
+
+    // 3. Site assigned staff (non-absent, not on another site)
+    const siteStaff = (currentSite?.assignedStaffIds || []).filter(id => {
+      const a = todayAttendances.find(att => att.staffId === id);
+      return a?.status !== 'absent' && (!a?.siteId || a?.siteId === siteId);
+    });
+
+    const combined = Array.from(new Set([...todaySiteStaff, ...myTeamStaff, ...siteStaff]));
+    setSelectedWorkers(combined);
+  }, [siteId, sites, staffList, staff?.id, todayAttendances, todayLog, isEditing]);
 
   // Additional expenses
   const [expenses, setExpenses] = useState<{ itemName: string; amount: number }[]>([]);
@@ -115,6 +282,264 @@ export const WorkEntryTab = ({
 
   // Selected site object
   const selectedSite = useMemo(() => sites.find(s => s.id === siteId), [sites, siteId]);
+
+  // Supervisor attendance site expense for this site (from Team Attendance)
+  const supervisorExpense = useMemo(() => {
+    // 1. Direct match: supervisor assigned this site today in Team Attendance
+    const isThisSite = (effectiveSupervisorAtt?.siteId === siteId) ||
+      (effectiveSupervisorAtt?.siteAssignments?.some(sa => sa.siteId === siteId));
+
+    if (isThisSite && (effectiveSupervisorAtt?.expenseAmount || 0) > 0) {
+      return {
+        amount: Number(effectiveSupervisorAtt?.expenseAmount) || 0,
+        notes: effectiveSupervisorAtt?.expenseNotes || 'Supervisor Attendance Expense',
+        method: effectiveSupervisorAtt?.expensePaymentMethod || 'Cash'
+      };
+    }
+
+    // 2. Also check if any attendance for today assigned this site with expense
+    for (const a of todayAttendances) {
+      if (a.siteId === siteId && (a.expenseAmount || 0) > 0) {
+        return {
+          amount: Number(a.expenseAmount) || 0,
+          notes: a.expenseNotes || 'Supervisor Attendance Expense',
+          method: a.expensePaymentMethod || 'Cash'
+        };
+      }
+    }
+
+    return null;
+  }, [effectiveSupervisorAtt, siteId, selectedSite, staff?.id, todayAttendances]);
+
+  // Supervisor daily salary for this site based on today's Team Attendance
+  const supervisorSalaryInfo = useMemo(() => {
+    const supervisorStaff = (staff?.role === 'supervisor' ? staff : undefined) ||
+      (staff?.supervisorId ? staffList.find(s => s.id === staff.supervisorId) : undefined) ||
+      (selectedSite?.supervisorId ? staffList.find(s => s.id === selectedSite.supervisorId) : undefined) ||
+      staff;
+
+    if (!supervisorStaff) return null;
+
+    // Check attendance for today
+    const att = todayAttendances.find(a => a.staffId === supervisorStaff.id);
+
+    // Supervisor is strictly allocated to this site only if:
+    // Their own attendance record in Team Attendance has siteId === this site
+    const isAllocatedToThisSite = Boolean(att?.siteId && att.siteId === siteId);
+
+    if (!isAllocatedToThisSite) return null;
+    if (att?.status === 'absent') return null;
+
+    const baseSalary = Number(supervisorStaff.perDaySalary) ||
+      (supervisorStaff.salaryType === 'hourly' ? (Number(supervisorStaff.perHourSalary) || 0) * 8 : 1200);
+
+    const isHalfDay = att?.status === 'half-day';
+    const multiplier = isHalfDay ? 0.5 : 1.0;
+    const baseWage = baseSalary * multiplier;
+
+    const otHours = Number(att?.otHours) || 0;
+    const hourlyRate = Number(supervisorStaff.perHourSalary) || (baseSalary / 8) || 150;
+    const otPay = otHours * hourlyRate;
+    const totalSalary = baseWage + otPay;
+
+    return {
+      supervisorName: supervisorStaff.name,
+      supervisorId: supervisorStaff.id,
+      baseSalary,
+      isHalfDay,
+      otHours,
+      otPay,
+      totalSalary,
+    };
+  }, [staff, staffList, selectedSite, siteId, todayAttendances]);
+
+  // Calculate salary for ALL employees on duty at this site today (supervisor + workers)
+  const allEmployeeSalaries = useMemo(() => {
+    const salaries: {
+      staffId: string;
+      staffName: string;
+      role: string;
+      baseSalary: number;
+      isHalfDay: boolean;
+      otHours: number;
+      otPay: number;
+      totalSalary: number;
+    }[] = [];
+
+    // 1. Add supervisor salary if allocated to this site
+    if (supervisorSalaryInfo) {
+      salaries.push({
+        staffId: supervisorSalaryInfo.supervisorId,
+        staffName: supervisorSalaryInfo.supervisorName,
+        role: 'supervisor',
+        baseSalary: supervisorSalaryInfo.baseSalary,
+        isHalfDay: supervisorSalaryInfo.isHalfDay,
+        otHours: supervisorSalaryInfo.otHours,
+        otPay: supervisorSalaryInfo.otPay,
+        totalSalary: supervisorSalaryInfo.totalSalary,
+      });
+    }
+
+    // 2. ONLY add named employees the supervisor explicitly selected in "Employees on Duty"
+    // (todayLog.workerIds = saved selections, selectedWorkers = current form state)
+    const workerIds = todayLog?.workerIds || selectedWorkers || [];
+    workerIds.forEach(wId => {
+      if (salaries.some(s => s.staffId === wId)) return; // skip if already added
+      const emp = staffList.find(s => s.id === wId);
+      if (!emp || emp.role === 'admin') return;
+
+      // Get their attendance for today to check status/OT
+      const att = todayAttendances.find(a => a.staffId === wId);
+      if (att?.status === 'absent') return;
+
+      const empDailyRate = Number(emp.perDaySalary) ||
+        (emp.salaryType === 'hourly' ? (Number(emp.perHourSalary) || 0) * 8 : 0) ||
+        Number(emp.underLabourSalary) || 0;
+      if (empDailyRate <= 0) return;
+
+      const empIsHalfDay = att?.status === 'half-day';
+      const empBaseWage = empDailyRate * (empIsHalfDay ? 0.5 : 1.0);
+      const empOtHours = Number(att?.otHours) || 0;
+      const empHourlyRate = Number(emp.perHourSalary) || (empDailyRate / 8) || 0;
+      const empOtPay = empOtHours * empHourlyRate;
+
+      salaries.push({
+        staffId: wId,
+        staffName: emp.name,
+        role: emp.role || 'worker',
+        baseSalary: empDailyRate,
+        isHalfDay: empIsHalfDay,
+        otHours: empOtHours,
+        otPay: empOtPay,
+        totalSalary: empBaseWage + empOtPay,
+      });
+    });
+
+    return salaries;
+  }, [supervisorSalaryInfo, todayLog?.workerIds, selectedWorkers, staffList, todayAttendances]);
+
+  // Calculate salary for unnamed crew (from siteLabourAllocation counts)
+  const unnamedCrewSalary = useMemo(() => {
+    // Determine supervisor (either logged in or site supervisor)
+    const supervisor = staff?.role === 'supervisor' ? staff : staffList.find(s => s.id === selectedSite?.supervisorId) || null;
+    if (!supervisor) return 0;
+    const crewRate = Number(supervisor.underLabourSalary) || 0;
+    if (crewRate <= 0) return 0;
+    const crewOtRate = Number((supervisor as any).underLabourOT) || 0;
+    // Full and half counts for unnamed crew from site labour allocation
+    const allocCounts = siteLabourAllocation?.counts || {};
+    const allocHalf = siteLabourAllocation?.halfDayCounts || {};
+    const fullCount = Object.values(allocCounts).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const halfCount = Object.values(allocHalf).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const totalWorkers = fullCount + halfCount;
+    const crewReg = (fullCount * crewRate) + (halfCount * (crewRate / 2));
+    // OT from attendance (if any)
+    const att = effectiveSupervisorAtt || myAtt;
+    const unOtHours = Number((att as any)?.unnamedOtHours) || 0;
+    const unOtStaff = (att as any)?.unnamedOtStaffCount !== undefined
+      ? Number((att as any).unnamedOtStaffCount)
+      : (unOtHours > 0 ? totalWorkers : 0);
+    const crewOt = unOtStaff * unOtHours * crewOtRate;
+    return crewReg + crewOt;
+  }, [siteLabourAllocation, effectiveSupervisorAtt, myAtt, staff, selectedSite, staffList]);
+
+  // Itemized breakdown of unnamed crew workforce allocated to this site from Team Attendance
+  const unnamedCrewBreakdown = useMemo(() => {
+    if (!siteLabourAllocation) return [];
+    const supervisor = staff?.role === 'supervisor' ? staff : staffList.find(s => s.id === selectedSite?.supervisorId) || null;
+    const crewRate = Number(supervisor?.underLabourSalary) || 800;
+    const crewOtRate = Number((supervisor as any)?.underLabourOT) || 100;
+    const att = effectiveSupervisorAtt || myAtt;
+    const unOtHours = Number((att as any)?.unnamedOtHours) || 0;
+
+    const items: {
+      trade: string;
+      label: string;
+      icon: string;
+      fullCount: number;
+      halfCount: number;
+      totalCount: number;
+      rate: number;
+      otHours: number;
+      otPay: number;
+      basePay: number;
+      totalPay: number;
+    }[] = [];
+
+    const allTrades = Array.from(new Set([
+      ...Object.keys(siteLabourAllocation.counts || {}),
+      ...Object.keys(siteLabourAllocation.halfDayCounts || {})
+    ]));
+
+    allTrades.forEach(trade => {
+      const full = Number(siteLabourAllocation.counts?.[trade]) || 0;
+      const half = Number(siteLabourAllocation.halfDayCounts?.[trade]) || 0;
+      const count = full + half;
+      if (count > 0) {
+        const meta = getLabourTypeMeta(trade);
+        const basePay = (full * crewRate) + (half * (crewRate / 2));
+        const otPay = unOtHours > 0 ? (count * unOtHours * crewOtRate) : 0;
+        items.push({
+          trade,
+          label: meta.label,
+          icon: meta.icon,
+          fullCount: full,
+          halfCount: half,
+          totalCount: count,
+          rate: crewRate,
+          otHours: unOtHours,
+          otPay,
+          basePay,
+          totalPay: basePay + otPay,
+        });
+      }
+    });
+
+    return items;
+  }, [siteLabourAllocation, staff, selectedSite, staffList, effectiveSupervisorAtt, myAtt]);
+
+  const totalUnnamedWorkers = useMemo(() => {
+    return unnamedCrewBreakdown.reduce((sum, item) => sum + item.totalCount, 0);
+  }, [unnamedCrewBreakdown]);
+
+  const totalTeamWorkerCount = useMemo(() => {
+    return allEmployeeSalaries.length + totalUnnamedWorkers;
+  }, [allEmployeeSalaries.length, totalUnnamedWorkers]);
+
+  const totalTeamSalary = useMemo(() => {
+    // Supervisor salary (named) + allocated unnamed crew salary for that day
+    const namedTotal = allEmployeeSalaries.reduce((sum, s) => sum + s.totalSalary, 0);
+    return namedTotal + unnamedCrewSalary;
+  }, [allEmployeeSalaries, unnamedCrewSalary]);
+
+  // Separated Supervisor Salary for today's log overview
+  const todaySupervisorSalary = useMemo(() => {
+    if (todayLog?.supervisorSalary && todayLog.supervisorSalary > 0) {
+      return todayLog.supervisorSalary;
+    }
+    const inExp = (todayLog?.expenses || []).find(e => e.itemName?.toLowerCase().includes('supervisor salary'));
+    if (inExp && inExp.amount > 0) return inExp.amount;
+    return supervisorSalaryInfo?.totalSalary || 0;
+  }, [todayLog?.supervisorSalary, todayLog?.expenses, supervisorSalaryInfo]);
+
+  // Pure site expenses for today's log overview (excluding supervisor salary)
+  const todaySiteExpenses = useMemo(() => {
+    const list = (todayLog?.expenses || []).filter(e => !e.itemName?.toLowerCase().includes('supervisor salary'));
+    if (supervisorExpense && supervisorExpense.amount > 0) {
+      const exists = list.some(e => e.itemName.includes('Supervisor Attendance Expense'));
+      if (!exists) {
+        list.unshift({
+          itemName: `Supervisor Attendance Expense (${supervisorExpense.notes})`,
+          amount: supervisorExpense.amount
+        });
+      }
+    }
+    return list;
+  }, [todayLog?.expenses, supervisorExpense]);
+
+  const totalTodaySiteExpenses = useMemo(() => {
+    return todaySiteExpenses.reduce((s, e) => s + (e.amount || 0), 0) + (todayLog?.transportCost || 0);
+  }, [todaySiteExpenses, todayLog?.transportCost]);
 
   // Sequential stages calculation with strict sequential progression
   const siteStages = useMemo(() => {
@@ -220,28 +645,74 @@ export const WorkEntryTab = ({
 
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
-    addDailyLog({
-      staffId: staff?.id || '',
-      staffName: staff?.name || '',
-      siteId: customSiteMode ? `custom_${Date.now()}` : siteId,
-      siteName: finalSiteName,
-      date: todayStr,
-      materials: [],
-      transportMode: undefined,
-      transportCost: 0,
-      expenses,
-      incomeFromClient: Number(income) || 0,
-      notes: [
-        customSiteMode ? `[New/Custom Visit: ${visitReason.trim()}]` : '',
-        workDesc.trim()
-      ].filter(Boolean).join('\n'),
-      workerCounts: {
-        painter: Number(workerCounts.painter) || 0,
-        plumber: Number(workerCounts.plumber) || 0,
-        labour: Number(workerCounts.labour) || 0,
-      },
-      workLevelStage: effectiveStage,
-    });
+    const sanitizedWorkerCounts: Record<string, number> = {};
+    if (siteLabourAllocation?.counts) {
+      Object.entries(siteLabourAllocation.counts).forEach(([k, v]) => {
+        if (Number(v) > 0) sanitizedWorkerCounts[k] = Number(v);
+      });
+    }
+
+    // Pure site expenses from form (cleanly separated from supervisor salary)
+    const finalExpenses = [...expenses].filter(e => !e.itemName?.toLowerCase().includes('supervisor salary'));
+    if (supervisorExpense && supervisorExpense.amount > 0) {
+      const alreadyIncluded = finalExpenses.some(e => e.itemName.includes('Supervisor Attendance Expense'));
+      if (!alreadyIncluded) {
+        finalExpenses.unshift({
+          itemName: `Supervisor Attendance Expense (${supervisorExpense.notes})`,
+          amount: supervisorExpense.amount,
+        });
+      }
+    }
+
+    const finalSupervisorSalary = supervisorSalaryInfo?.totalSalary || 0;
+    const finalEmployeeSalaries = allEmployeeSalaries.filter(s => s.totalSalary > 0);
+
+    if (editingLogId) {
+      updateDailyLog(editingLogId, {
+        siteName: finalSiteName,
+        expenses: finalExpenses,
+        supervisorSalary: finalSupervisorSalary,
+        employeeSalaries: finalEmployeeSalaries,
+        incomeFromClient: Number(income) || 0,
+        incomePaymentMethod: Number(income) > 0 ? incomePaymentMethod : undefined,
+        notes: [
+          customSiteMode ? `[New/Custom Visit: ${visitReason.trim()}]` : '',
+          workDesc.trim()
+        ].filter(Boolean).join('\n'),
+        workerCounts: sanitizedWorkerCounts,
+        workLevelStage: effectiveStage,
+        workerIds: selectedWorkers,
+      });
+      toast.success(effectiveStage ? `Work entry for ${effectiveStage} updated successfully!` : 'Work entry updated successfully!');
+      setIsEditing(false);
+      setEditingLogId(null);
+    } else {
+      addDailyLog({
+        staffId: staff?.id || '',
+        staffName: staff?.name || '',
+        siteId: customSiteMode ? `custom_${Date.now()}` : siteId,
+        siteName: finalSiteName,
+        date: todayStr,
+        materials: [],
+        transportMode: undefined,
+        transportCost: 0,
+        expenses: finalExpenses,
+        supervisorSalary: finalSupervisorSalary,
+        employeeSalaries: finalEmployeeSalaries,
+        incomeFromClient: Number(income) || 0,
+        incomePaymentMethod: Number(income) > 0 ? incomePaymentMethod : undefined,
+        notes: [
+          customSiteMode ? `[New/Custom Visit: ${visitReason.trim()}]` : '',
+          workDesc.trim()
+        ].filter(Boolean).join('\n'),
+        workerCounts: sanitizedWorkerCounts,
+        workLevelStage: effectiveStage,
+        workerIds: selectedWorkers,
+      });
+      toast.success(effectiveStage ? `Work log & expenses recorded for ${effectiveStage}!` : 'Work entry submitted successfully!');
+      setIsEditing(false);
+      setEditingLogId(null);
+    }
 
     // Auto-update stage completionStatus to 'in_progress' if still 'pending'
     if (!customSiteMode && effectiveStage && siteId) {
@@ -262,7 +733,6 @@ export const WorkEntryTab = ({
       }
     }
 
-    toast.success(effectiveStage ? `Work log & expenses recorded for ${effectiveStage}!` : 'Work entry submitted successfully!');
     setWorkDesc('');
     setIncome('');
     setExpenses([]);
@@ -322,11 +792,38 @@ export const WorkEntryTab = ({
           </div>
 
           <div className="space-y-6 pt-1">
-            {/* Left Column (now top): Site Selection, Milestone & Description */}
-            <div className="space-y-4">
+            {/* Active Attendance Site Notice */}
+            {myAtt?.siteId && (
+              <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-600 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 tracking-wider block">
+                      Active Site from Team Attendance
+                    </span>
+                    <strong className="font-bold text-sm text-foreground">
+                      {sites.find(s => s.id === myAtt.siteId)?.name || 'Assigned Site'}
+                    </strong>
+                  </div>
+                </div>
+                {siteId !== myAtt.siteId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSiteId(myAtt.siteId!)}
+                    className="h-8 text-xs font-bold rounded-xl border-emerald-500/40 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-500/20 shrink-0 self-start sm:self-auto"
+                  >
+                    Switch to Assigned Site →
+                  </Button>
+                )}
+              </div>
+            )}
 
-          {/* Site selection */}
-          <div>
+            {/* Site selection */}
+            <div>
             <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-2">
               <MapPin className="w-3.5 h-3.5" /> Select Site
             </Label>
@@ -372,10 +869,12 @@ export const WorkEntryTab = ({
                             setSiteSearch('');
                             // Auto-fill workerCounts from attendance siteAssignments
                             const assignment = myAtt?.siteAssignments?.find(sa => sa.siteId === s.id);
-                            if (assignment) {
+                            if (assignment?.counts) {
                               setWorkerCounts(assignment.counts);
+                            } else if ((!myAtt?.siteAssignments || myAtt.siteAssignments.length === 0) && myAtt?.siteId === s.id && availableCrew) {
+                              setWorkerCounts(availableCrew);
                             } else {
-                              setWorkerCounts({ painter: 0, plumber: 0, labour: 0 });
+                              setWorkerCounts({});
                             }
                           }
                         }}
@@ -451,275 +950,965 @@ export const WorkEntryTab = ({
             </div>
           )}
 
-          {/* ── Active Construction Milestone Banner ── */}
-          {siteId && !customSiteMode && siteStages.length > 0 && (
-            <div className="animate-slide-up">
-              {allStagesCompleted ? (
-                <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center gap-3 text-xs text-emerald-700 dark:text-emerald-400 font-semibold shadow-xs">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-600 shrink-0">
-                    <CheckCircle2 className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-sm">All Project Milestones Completed! 🎉</p>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      All construction stages for this site have been verified and marked completed by Admin.
-                    </p>
-                  </div>
-                </div>
-              ) : currentActiveStage ? (
-                <div className="p-4 rounded-2xl border border-primary/30 bg-gradient-to-r from-primary/[0.08] via-card to-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
-                      L{currentActiveStage.levelNumber}
+          {todayLog && !isEditing ? (
+            /* ── 1. Submitted Entry View (Edit Only Mode) ── */
+            <div className="space-y-4 animate-slide-up pt-1">
+              <div className="border border-emerald-500/30 bg-gradient-to-br from-emerald-500/[0.06] via-card to-card p-4 sm:p-5 rounded-2xl shadow-xs space-y-4">
+                {/* Header with Title and Edit Button */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-border/40">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-600 flex items-center justify-center shrink-0">
+                      <CheckCircle2 className="w-5 h-5" />
                     </div>
-                    <div className="min-w-0">
+                    <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
-                          Active Construction Milestone • Level {currentActiveStage.levelNumber} of {siteStages.length}
-                        </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${currentActiveStage.isApprovalPending
-                            ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30 animate-pulse'
-                            : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                          }`}>
-                          {currentActiveStage.isApprovalPending ? '⏳ Approval Pending' : '⚡ In Progress'}
+                        <h3 className="font-heading font-bold text-sm sm:text-base text-foreground">
+                          Today's Work Entry Submitted
+                        </h3>
+                        <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                          Recorded
                         </span>
                       </div>
-                      <h3 className="text-sm font-bold text-foreground truncate mt-0.5">
-                        {currentActiveStage.stageName}
-                      </h3>
-                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
-                        Work descriptions, materials, and expenses logged today will be tracked under this level.
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {todayStr} • {selectedSite?.name || todayLog.siteName}
                       </p>
                     </div>
                   </div>
 
-                  {/* Milestone Completion Action */}
-                  <div className="shrink-0 self-start sm:self-auto">
-                    {currentActiveStage.isApprovalPending ? (
-                      <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-700 dark:text-blue-400 text-xs font-bold">
-                        <Clock className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
-                        <span>Completion Pending Admin Review</span>
+                  <Button
+                    type="button"
+                    onClick={() => startEditLog(todayLog)}
+                    className="h-9 px-4 rounded-xl text-xs font-bold gap-1.5 shadow-sm text-white self-start sm:self-auto hover:opacity-90 active:scale-95 transition-all"
+                    style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
+                  >
+                    <PenLine className="w-3.5 h-3.5" /> Edit Entry
+                  </Button>
+                </div>
+
+                {/* Level Milestone Banner if present */}
+                {todayLog.workLevelStage && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-xl bg-primary/10 border border-primary/20 text-xs">
+                    <Layers className="w-4 h-4 text-primary shrink-0" />
+                    <span className="text-muted-foreground">Recorded for Milestone:</span>
+                    <strong className="text-foreground">{todayLog.workLevelStage}</strong>
+                  </div>
+                )}
+
+                {/* Summary Stat Grid - Separated Salary & Expenses */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 text-xs">
+
+                  {(() => {
+                    const effectiveCounts: Record<string, number> = {};
+                    if (todayLog.workerCounts && Object.values(todayLog.workerCounts).some(v => (Number(v) || 0) > 0)) {
+                      Object.entries(todayLog.workerCounts).forEach(([k, v]) => {
+                        if (Number(v) > 0) effectiveCounts[k] = Number(v);
+                      });
+                    } else if (siteLabourAllocation?.counts) {
+                      Object.entries(siteLabourAllocation.counts).forEach(([k, v]) => {
+                        if (Number(v) > 0) effectiveCounts[k] = Number(v);
+                      });
+                    }
+                    const halfDayCounts = siteLabourAllocation?.halfDayCounts || {};
+                    const totalCrewWorkers = Object.values(effectiveCounts).reduce((s, v) => s + (Number(v) || 0), 0) +
+                      Object.values(halfDayCounts).reduce((s, v) => s + (Number(v) || 0), 0);
+
+                    return (
+                      <div className="p-3 rounded-xl bg-card border border-border/50">
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block mb-1">
+                          Unnamed Crew
+                        </span>
+                        <p className="font-bold text-foreground text-sm">
+                          {totalCrewWorkers} Workers
+                        </p>
                       </div>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setIsCompletionModalOpen(true)}
-                        className="h-9 rounded-xl text-xs font-bold gap-1.5 bg-primary/10 text-primary hover:bg-primary/20 border-primary/30 shadow-xs transition-all"
-                      >
-                        <SendHorizonal className="w-3.5 h-3.5" /> Request Level {currentActiveStage.levelNumber} Completion
-                      </Button>
+                    );
+                  })()}
+
+                  <div
+                    className="p-3 rounded-xl bg-card border border-blue-500/30 bg-blue-500/[0.04] cursor-pointer hover:border-blue-500/50 transition-all"
+                    onClick={() => setShowSalaryBreakdown(v => !v)}
+                  >
+                    <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 uppercase tracking-wider block mb-1">
+                      Team Daily Salary
+                    </span>
+                    <p className="font-bold text-blue-600 dark:text-blue-400 text-sm">
+                      ₹{totalTeamSalary.toLocaleString()}
+                    </p>
+                    <span className="text-[9px] font-semibold text-muted-foreground block mt-0.5">
+                      {allEmployeeSalaries.length} Employee{allEmployeeSalaries.length !== 1 ? 's' : ''} • Click to {showSalaryBreakdown ? 'hide' : 'view'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-card border border-border/50">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block mb-1">
+                      Site Expenses
+                    </span>
+                    <p className="font-bold text-destructive text-sm">
+                      ₹{totalTodaySiteExpenses.toLocaleString()}
+                    </p>
+                    <span className="text-[9px] font-semibold text-muted-foreground block mt-0.5">
+                      Food, Fuel & Misc
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-card border border-border/50">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block mb-1">
+                      Client Income
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="font-bold text-emerald-600 text-sm">
+                        ₹{(todayLog.incomeFromClient || 0).toLocaleString()}
+                      </p>
+                      {todayLog.incomePaymentMethod && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
+                          {todayLog.incomePaymentMethod}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Unnamed Labour Workforce Breakdown */}
+                {(() => {
+                  const effectiveCounts: Record<string, number> = {};
+                  if (todayLog.workerCounts && Object.values(todayLog.workerCounts).some(v => (Number(v) || 0) > 0)) {
+                    Object.entries(todayLog.workerCounts).forEach(([k, v]) => {
+                      if (Number(v) > 0) effectiveCounts[k] = Number(v);
+                    });
+                  } else if (siteLabourAllocation?.counts) {
+                    Object.entries(siteLabourAllocation.counts).forEach(([k, v]) => {
+                      if (Number(v) > 0) effectiveCounts[k] = Number(v);
+                    });
+                  }
+
+                  const halfCounts = siteLabourAllocation?.halfDayCounts || {};
+                  const activeTrades = Array.from(new Set([
+                    ...Object.entries(effectiveCounts).filter(([_, count]) => Number(count) > 0).map(([k]) => k),
+                    ...Object.entries(halfCounts).filter(([_, count]) => Number(count) > 0).map(([k]) => k)
+                  ]));
+
+                  const totalFull = activeTrades.reduce((acc, t) => acc + (Number(effectiveCounts[t]) || 0), 0);
+                  const totalHalf = activeTrades.reduce((acc, t) => acc + (Number(halfCounts[t]) || 0), 0);
+                  const totalCrew = totalFull + totalHalf;
+
+                  return (
+                    <div className="p-3.5 rounded-xl bg-card/80 border border-border/50 space-y-2.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5 text-primary" /> Unnamed Labour Allocation ({totalCrew} Total)
+                        </span>
+                        {totalCrew > 0 && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
+                            {activeTrades.length} Trade{activeTrades.length > 1 ? 's' : ''} Allocated from Attendance
+                          </span>
+                        )}
+                      </div>
+
+                      {activeTrades.length > 0 ? (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 pt-0.5">
+                          {activeTrades.map(trade => {
+                            const meta = getLabourTypeMeta(trade);
+                            const count = effectiveCounts[trade] || 0;
+                            const half = halfCounts[trade] || 0;
+                            return (
+                              <div key={trade} className="p-2.5 rounded-lg bg-muted/40 border border-border/40 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground truncate">
+                                    <span className="text-sm">{meta.icon}</span>
+                                    <span className="capitalize">{meta.label}</span>
+                                  </span>
+                                  <span className="font-extrabold text-xs px-2 py-0.5 rounded-md bg-background border border-border/60 text-primary">
+                                    {count} Full
+                                  </span>
+                                </div>
+                                {half > 0 && (
+                                  <p className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold text-right">
+                                    + {half} Half Day
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground italic py-0.5">
+                          No unnamed crew allocated for this site in Team Attendance.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Named Employees List */}
+
+                {/* Work Description */}
+                <div className="space-y-1.5 pt-1 border-t border-border/40">
+                  <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                    Work Completed / Description
+                  </span>
+                  <div className="text-xs text-foreground bg-card/60 p-3.5 rounded-xl border border-border/40 whitespace-pre-line leading-relaxed font-sans">
+                    {todayLog.notes || 'No work description notes'}
+                  </div>
+                </div>
+
+                {/* 1. Team Daily Salary Breakdown (Clickable) */}
+                {(allEmployeeSalaries.length > 0 || unnamedCrewSalary > 0) && (
+                  <div className="space-y-2 pt-1 border-t border-border/40">
+                    <div
+                      className="flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setShowSalaryBreakdown(v => !v)}
+                    >
+                      <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                        <UserCheck className="w-3.5 h-3.5 text-blue-500" /> Team Daily Salary
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-blue-600 dark:text-blue-400">
+                          ₹{totalTeamSalary.toLocaleString()}
+                        </span>
+                        <span className={`text-[10px] text-muted-foreground transition-transform ${showSalaryBreakdown ? 'rotate-180' : ''}`}>▼</span>
+                      </div>
+                    </div>
+                    {showSalaryBreakdown && (
+                      <div className="space-y-1.5 animate-slide-up">
+                        {allEmployeeSalaries.map((emp) => (
+                          <div key={emp.staffId} className={`flex justify-between items-center text-xs p-3 rounded-xl border ${
+                            emp.role === 'supervisor'
+                              ? 'bg-blue-500/[0.07] border-blue-500/25'
+                              : 'bg-violet-500/[0.05] border-violet-500/25'
+                          }`}>
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-bold text-foreground">{emp.staffName}</span>
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                  emp.role === 'supervisor'
+                                    ? 'bg-blue-500/20 text-blue-800 dark:text-blue-200'
+                                    : 'bg-violet-500/20 text-violet-800 dark:text-violet-200'
+                                }`}>
+                                  {emp.role === 'supervisor' ? '👷 Supervisor' : `🧑‍💼 ${emp.role.charAt(0).toUpperCase() + emp.role.slice(1)}`}
+                                </span>
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                  emp.isHalfDay ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200' : 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200'
+                                }`}>
+                                  {emp.isHalfDay ? 'Half Day' : 'Full Day'}
+                                  {emp.otHours > 0 ? ` + ${emp.otHours}h OT` : ''}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground">
+                                Daily rate: ₹{emp.baseSalary.toLocaleString()}
+                                {emp.otPay > 0 ? ` · OT: ₹${emp.otPay.toLocaleString()}` : ''}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <span className={`text-sm font-extrabold ${
+                                emp.role === 'supervisor'
+                                  ? 'text-blue-600 dark:text-blue-400'
+                                  : 'text-violet-600 dark:text-violet-400'
+                              }`}>
+                                ₹{emp.totalSalary.toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                        {/* Unnamed crew line item */}
+                        {unnamedCrewSalary > 0 && (() => {
+                          const supervisor = staff?.role === 'supervisor' ? staff : staffList.find(s => s.id === selectedSite?.supervisorId);
+                          const fullCount = Object.values(siteLabourAllocation?.counts || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+                          const halfCount = Object.values(siteLabourAllocation?.halfDayCounts || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+                          const totalCrew = fullCount + halfCount;
+                          const crewRate = Number(supervisor?.underLabourSalary) || 0;
+                          return (
+                            <div className="flex justify-between items-center text-xs p-3 rounded-xl border bg-amber-500/[0.06] border-amber-500/25">
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-foreground">Unnamed Crew</span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-800 dark:text-amber-200">
+                                    🧑‍🔧 {totalCrew} Worker{totalCrew !== 1 ? 's' : ''}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                  Rate: ₹{crewRate.toLocaleString()}/day
+                                  {halfCount > 0 ? ` · ${halfCount} half-day` : ''}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-extrabold text-amber-600 dark:text-amber-400">
+                                  ₹{unnamedCrewSalary.toLocaleString()}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        <div className="flex justify-between items-center text-xs p-2.5 rounded-xl bg-blue-500/[0.12] border border-blue-500/35 font-bold">
+                          <span className="text-blue-800 dark:text-blue-200">Total Team Salary</span>
+                          <span className="text-blue-700 dark:text-blue-300 text-sm">₹{totalTeamSalary.toLocaleString()}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2. Itemized Daily Site Expenses (Separated) */}
+                <div className="space-y-2 pt-1 border-t border-border/40">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                      Itemized Daily Site Expenses ({todaySiteExpenses.length})
+                    </span>
+                    <span className="text-xs font-bold text-destructive">
+                      Total Expenses: ₹{totalTodaySiteExpenses.toLocaleString()}
+                    </span>
+                  </div>
+                  {todaySiteExpenses.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {todaySiteExpenses.map((exp, i) => (
+                        <div key={i} className="flex justify-between items-center text-xs p-2.5 rounded-xl bg-card/50 border border-border/30">
+                          <span className="text-foreground font-medium flex items-center gap-1.5">
+                            {exp.itemName.includes('Supervisor Attendance Expense') && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                                Team Attendance
+                              </span>
+                            )}
+                            {exp.itemName}
+                          </span>
+                          <span className="font-bold text-destructive">₹{exp.amount.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-muted/20 border border-border/40 text-center text-xs text-muted-foreground">
+                      No additional site expenses logged (Food, fuel, local materials).
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-muted-foreground italic text-center pt-2 border-t border-border/30">
+                  ✓ Today's work entry has been submitted for this site. Click <strong>Edit Entry</strong> above to update any information.
+                </p>
+              </div>
+            </div>
+          ) : (
+            /* ── 2. Work Entry Form (New or Editing) ── */
+            <>
+              {/* Editing Banner */}
+              {isEditing && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <PenLine className="w-4 h-4 text-amber-600" />
+                    <span className="font-bold text-amber-900 dark:text-amber-200">
+                      Editing Today's Entry for {selectedSite?.name || todayLog?.siteName}
+                    </span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={cancelEdit}
+                    className="h-7 text-xs font-semibold hover:bg-amber-500/20"
+                  >
+                    Cancel Edit
+                  </Button>
+                </div>
+              )}
+
+              {/* ── Active Construction Milestone Banner ── */}
+              {siteId && !customSiteMode && siteStages.length > 0 && (
+                <div className="animate-slide-up">
+                  {allStagesCompleted ? (
+                    <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center gap-3 text-xs text-emerald-700 dark:text-emerald-400 font-semibold shadow-xs">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-600 shrink-0">
+                        <CheckCircle2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-sm">All Project Milestones Completed! 🎉</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          All construction stages for this site have been verified and marked completed by Admin.
+                        </p>
+                      </div>
+                    </div>
+                  ) : currentActiveStage ? (
+                    <div className="p-4 rounded-2xl border border-primary/30 bg-gradient-to-r from-primary/[0.08] via-card to-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+                          L{currentActiveStage.levelNumber}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">
+                              Active Construction Milestone • Level {currentActiveStage.levelNumber} of {siteStages.length}
+                            </span>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${currentActiveStage.isApprovalPending
+                                ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30 animate-pulse'
+                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                              }`}>
+                              {currentActiveStage.isApprovalPending ? '⏳ Approval Pending' : '⚡ In Progress'}
+                            </span>
+                          </div>
+                          <h3 className="text-sm font-bold text-foreground truncate mt-0.5">
+                            {currentActiveStage.stageName}
+                          </h3>
+                          <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                            Work descriptions, materials, and expenses logged today will be tracked under this level.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Milestone Completion Action */}
+                      <div className="shrink-0 self-start sm:self-auto">
+                        {currentActiveStage.isApprovalPending ? (
+                          <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-700 dark:text-blue-400 text-xs font-bold">
+                            <Clock className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                            <span>Completion Pending Admin Review</span>
+                          </div>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setIsCompletionModalOpen(true)}
+                            className="h-9 rounded-xl text-xs font-bold gap-1.5 bg-primary/10 text-primary hover:bg-primary/20 border-primary/30 shadow-xs transition-all"
+                          >
+                            <SendHorizonal className="w-3.5 h-3.5" /> Request Level {currentActiveStage.levelNumber} Completion
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* No stages warning when site selected but no stages defined */}
+              {siteId && !customSiteMode && siteStages.length === 0 && paymentStageMaster.length === 0 && (
+                <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs text-amber-700 dark:text-amber-400 animate-slide-up">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>No work levels have been set up by Admin yet. Please contact Admin to define Payment Stages in Settings.</span>
+                </div>
+              )}
+
+              {/* Work Description */}
+              <div>
+                <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1.5">
+                  <Clock className="w-3.5 h-3.5" /> Work Description *
+                </Label>
+                <Textarea
+                  placeholder="Describe work completed today, milestones, issues encountered..."
+                  value={workDesc}
+                  onChange={e => setWorkDesc(e.target.value)}
+                  rows={4}
+                  className="rounded-xl text-sm"
+                  required
+                />
+              </div>
+
+              {/* Assigned Employees on Duty (Named Staff) */}
+              <div className="space-y-2.5 p-3.5 rounded-2xl bg-card border border-border/60 shadow-xs">
+                <div className="flex items-center justify-between pb-2 border-b border-border/40">
+                  <div>
+                    <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-primary" /> Employees on Duty for this Site ({selectedWorkers.length + totalUnnamedWorkers} Total{totalUnnamedWorkers > 0 ? `: ${selectedWorkers.length} Named + ${totalUnnamedWorkers} Crew` : ''})
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Select registered staff and verify unnamed crew workforce on duty today.
+                    </p>
+                  </div>
+                  {(selectedWorkers.length > 0 || totalUnnamedWorkers > 0) && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                      {selectedWorkers.length + totalUnnamedWorkers} on Duty {totalUnnamedWorkers > 0 ? `(${selectedWorkers.length} Named, ${totalUnnamedWorkers} Crew)` : 'Selected'}
+                    </span>
+                  )}
+                </div>
+
+                {totalUnnamedWorkers > 0 && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300">
+                    <span className="flex items-center gap-1.5 font-medium text-[11px]">
+                      <Users className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <strong>{totalUnnamedWorkers} Unnamed Crew Members</strong> allocated from Team Attendance ({unnamedCrewBreakdown.map(i => `${i.totalCount} ${i.label}`).join(', ')})
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-900 dark:text-amber-200 shrink-0">
+                      Auto-Included
+                    </span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                  {staffList
+                    .filter(s => s.role !== 'supervisor' && s.role !== 'admin' && s.id !== staff?.id)
+                    .filter(emp => {
+                      const empAtt = todayAttendances.find(a => a.staffId === emp.id);
+                      const isTodayAllocatedHere = empAtt?.siteId === siteId;
+                      const isTodayAllocatedElsewhere = empAtt?.siteId && empAtt.siteId !== siteId;
+                      if (isTodayAllocatedElsewhere) return false;
+                      const isSiteAssigned = selectedSite?.assignedStaffIds?.includes(emp.id);
+                      const isMyTeam = emp.supervisorId === staff?.id;
+                      return isTodayAllocatedHere || isSiteAssigned || isMyTeam;
+                    })
+                    .map(emp => {
+                      const isChecked = selectedWorkers.includes(emp.id);
+                      const empAtt = todayAttendances.find(a => a.staffId === emp.id);
+                      const isTodayAllocatedHere = empAtt?.siteId === siteId;
+                      const isSiteAssigned = selectedSite?.assignedStaffIds?.includes(emp.id);
+                      const isMyCrew = emp.supervisorId === staff?.id;
+
+                      return (
+                        <label
+                          key={emp.id}
+                          className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
+                            isChecked
+                              ? 'border-primary bg-primary/10 text-foreground font-semibold shadow-2xs'
+                              : 'border-border/50 bg-muted/20 hover:bg-muted/40 text-muted-foreground'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setSelectedWorkers(prev => [...prev, emp.id]);
+                                } else {
+                                  setSelectedWorkers(prev => prev.filter(id => id !== emp.id));
+                                }
+                              }}
+                              className="rounded accent-primary w-4 h-4"
+                            />
+                            <div className="min-w-0 truncate">
+                              <p className="text-xs font-semibold truncate leading-tight">{emp.name}</p>
+                              <p className="text-[10px] text-muted-foreground capitalize leading-tight">
+                                {emp.role} {emp.phone ? `• ${emp.phone}` : ''}
+                              </p>
+                            </div>
+                          </div>
+                          {isTodayAllocatedHere && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25 shrink-0">
+                              Allocated Today
+                            </span>
+                          )}
+                          {!isTodayAllocatedHere && isSiteAssigned && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25 shrink-0">
+                              Site Staff
+                            </span>
+                          )}
+                          {!isTodayAllocatedHere && isMyCrew && !isSiteAssigned && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/25 shrink-0">
+                              Your Crew
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                </div>
+                {staffList.filter(s => s.role !== 'supervisor' && s.role !== 'admin' && s.id !== staff?.id).length === 0 && (
+                  <p className="text-xs text-muted-foreground italic py-1">
+                    No workers or employees added under Staff Management yet.
+                  </p>
+                )}
+              </div>
+
+              {/* Right Column (now bottom): Crew, Materials, Expenses, Income & Submission */}
+              <div className="space-y-4">
+                {/* Crew Members Included (Unnamed Workforce strictly from Team Attendance Site Labour Allocation) */}
+                <div className="space-y-3 p-3.5 rounded-2xl bg-card border border-border/60 shadow-xs">
+                  <div className="flex items-center justify-between pb-2 border-b border-border/40">
+                    <div>
+                      <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-primary" /> Unnamed Crew / Labour Workforce
+                      </Label>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        {allocatedLabourTypes.length > 0
+                          ? 'Showing crew allocated in Team Attendance Site Labour Allocation for this site.'
+                          : 'No crew allocated to this site in Team Attendance Site Labour Allocation.'}
+                      </p>
+                    </div>
+                    {(() => {
+                      const totalAlloc = allocatedLabourTypes.reduce((acc, t) => {
+                        return acc + Number(siteLabourAllocation?.counts?.[t] || 0) + Number(siteLabourAllocation?.halfDayCounts?.[t] || 0);
+                      }, 0);
+                      return totalAlloc > 0 ? (
+                        <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
+                          Total {totalAlloc} Crew Allocated from Attendance
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
+
+                  {/* Attendance Status Alert if not marked yet */}
+                  {!isSelfPresent && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Supervisor attendance for today ({todayStr}) is not marked yet.</span>
+                      </div>
+                      {onNavigateToAttendance && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={onNavigateToAttendance}
+                          className="h-7 text-[11px] font-bold rounded-lg bg-amber-500/20 border-amber-500/40 text-amber-900 dark:text-amber-200 shrink-0 hover:bg-amber-500/30"
+                        >
+                          Mark Attendance First →
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Strictly only display trades allocated in Team Attendance */}
+                  {allocatedLabourTypes.length > 0 ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+                      {allocatedLabourTypes.map(type => {
+                        const meta = getLabourTypeMeta(type);
+                        const currentVal = Number(workerCounts[type] ?? siteLabourAllocation?.counts?.[type] ?? 0);
+                        const halfVal = Number(siteLabourAllocation?.halfDayCounts?.[type] || 0);
+
+                        return (
+                          <div key={type} className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.04] space-y-2">
+                            <div className="flex items-center justify-between gap-1">
+                              <Label className="text-xs font-bold text-foreground truncate flex items-center gap-1.5">
+                                <span className="text-base">{meta.icon}</span>
+                                <span className="capitalize truncate">{meta.label}</span>
+                              </Label>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                Allocated
+                              </span>
+                            </div>
+                            <div className="pt-1 flex items-center justify-between">
+                              <span className="text-xs font-extrabold px-3 py-1.5 rounded-lg bg-card border border-border/60 text-primary shadow-2xs">
+                                {currentVal} Full Day
+                              </span>
+                              {halfVal > 0 && (
+                                <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2 py-1 rounded-md border border-amber-500/20">
+                                  + {halfVal} Half Day
+                                </span>
+                              )}
+                            </div>
+                            {halfVal > 0 && (
+                              <p className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold pt-0.5">
+                                + {halfVal} Half Day allocated
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-xl border border-dashed border-border/60 text-center space-y-2 bg-muted/10">
+                      <p className="text-xs text-muted-foreground">
+                        No unnamed labour was allocated to this site in <strong>Team Attendance → Site Labour Allocation</strong>.
+                      </p>
+                      {onNavigateToAttendance && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={onNavigateToAttendance}
+                          className="h-8 text-xs font-bold gap-1.5 rounded-xl bg-primary/10 text-primary border-primary/30 hover:bg-primary/20"
+                        >
+                          <Users className="w-3.5 h-3.5" /> Allocate Labour in Team Attendance →
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {(() => {
+                    const totalAlloc = Object.values(siteLabourAllocation?.counts || {}).reduce((a, b) => a + (Number(b) || 0), 0) +
+                      Object.values(siteLabourAllocation?.halfDayCounts || {}).reduce((a, b) => a + (Number(b) || 0), 0);
+                    return totalAlloc > 0 ? (
+                      <p className="text-[11px] text-primary font-medium pt-1">
+                        ✓ {totalAlloc} crew member{totalAlloc > 1 ? 's' : ''} allocated from Team Attendance for this site
+                      </p>
+                    ) : null;
+                  })()}
+                </div>
+
+                <div>
+                  <div className="space-y-2">
+                    {onNavigateToMaterialRequest && (
+                      <div className="pt-2 border-t border-border/40">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => onNavigateToMaterialRequest(siteId)}
+                          className="w-full h-10 rounded-xl text-xs font-bold gap-2 bg-primary/10 text-primary hover:bg-primary/20 border-primary/30 shadow-xs transition-all"
+                        >
+                          <Package className="w-4 h-4 text-primary shrink-0" />
+                          <span>Need Materials from Store/Supplier? Go to Material Request Page →</span>
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>
-              ) : null}
-            </div>
-          )}
 
-          {/* No stages warning when site selected but no stages defined */}
-          {siteId && !customSiteMode && siteStages.length === 0 && paymentStageMaster.length === 0 && (
-            <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs text-amber-700 dark:text-amber-400 animate-slide-up">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>No work levels have been set up by Admin yet. Please contact Admin to define Payment Stages in Settings.</span>
-            </div>
-          )}
-
-          {/* Work Description */}
-          <div>
-            <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1.5">
-              <Clock className="w-3.5 h-3.5" /> Work Description *
-            </Label>
-            <Textarea
-              placeholder="Describe work completed today, milestones, issues encountered..."
-              value={workDesc}
-              onChange={e => setWorkDesc(e.target.value)}
-              rows={4}
-              className="rounded-xl text-sm"
-              required
-            />
-          </div>
-        </div>
-
-        {/* Right Column (now bottom): Crew, Materials, Expenses, Income & Submission */}
-        <div className="space-y-4">
-          {/* Crew Members Included (Based on Attendance) */}
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-primary" /> Crew Members Present at this Site
-              </Label>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Assign your available crew members to this site. <br />
-                <span className="text-emerald-600 dark:text-emerald-400 font-medium">✨ Auto-filled based on your Team Attendance site assignments.</span><br />
-                (Available: {availableCrew.painter} Painters, {availableCrew.plumber} Plumbers, {availableCrew.labour} Labourers)
-              </p>
-            </div>
-
-            {/* Attendance Status Alert if not marked yet */}
-            {!isSelfPresent && (
-              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>You have not marked your attendance for today ({todayStr}).</span>
-                </div>
-                {onNavigateToAttendance && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={onNavigateToAttendance}
-                    className="h-7 text-[11px] font-bold rounded-lg bg-amber-500/20 border-amber-500/40 text-amber-900 dark:text-amber-200 shrink-0 hover:bg-amber-500/30"
-                  >
-                    Mark Attendance First →
-                  </Button>
-                )}
-              </div>
-            )}
-
-            {/* Crew Counts Inputs */}
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { id: 'painter' as const, label: 'Painters' },
-                { id: 'plumber' as const, label: 'Plumbers' },
-                { id: 'labour' as const, label: 'Labourers' }
-              ].map(cat => {
-                const maxAvailable = availableCrew[cat.id];
-                return (
-                  <div key={cat.id} className="space-y-1.5">
-                    <Label className="text-[11px] font-semibold text-muted-foreground">{cat.label}</Label>
-                    <Input
-                      type="number"
-                      readOnly
-                      value={workerCounts[cat.id] || 0}
-                      className="h-9 text-xs rounded-xl bg-muted/50 text-muted-foreground cursor-not-allowed focus-visible:ring-0"
-                    />
-                    <p className="text-[9px] text-muted-foreground text-center">
-                      Auto-synced
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-
-            {Object.values(workerCounts).reduce((a, b) => a + b, 0) > 0 && (
-              <p className="text-[11px] text-primary font-medium pt-1">
-                ✓ {Object.values(workerCounts).reduce((a, b) => a + b, 0)} crew members assigned to this site
-              </p>
-            )}
-          </div>
-
-          <div>
-            <div className="space-y-2">
-              {onNavigateToMaterialRequest && (
-                <div className="pt-2 border-t border-border/40">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => onNavigateToMaterialRequest(siteId)}
-                    className="w-full h-10 rounded-xl text-xs font-bold gap-2 bg-primary/10 text-primary hover:bg-primary/20 border-primary/30 shadow-xs transition-all"
-                  >
-                    <Package className="w-4 h-4 text-primary shrink-0" />
-                    <span>Need Materials from Store/Supplier? Go to Material Request Page →</span>
-                  </Button>
-                </div>
-              )}
-            </div>
-          </div>
-
-
-          {/* Extra Expenses */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <Label className="text-xs font-semibold text-muted-foreground block">Supervisor Daily Expenses</Label>
-              {expenses.length > 0 && (
-                <span className="text-xs font-bold text-primary">
-                  Total: ₹{expenses.reduce((s, e) => s + (e.amount || 0), 0).toLocaleString()}
-                </span>
-              )}
-            </div>
-            <div className="space-y-2">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <select
-                  value={expenseMode}
-                  onChange={e => setExpenseMode(e.target.value as any)}
-                  className="h-10 rounded-xl border border-input bg-card px-3 text-xs font-semibold"
-                >
-                  <option value="food">Site Food & Tea for Crew</option>
-                  <option value="bike_petrol">Bike Petrol / Fuel</option>
-                  <option value="auto">Auto / Cab Fare</option>
-                  <option value="bus">Bus / Train Fare</option>
-                  <option value="materials">Local Materials / Hardware</option>
-                  <option value="tools">Tool Hire / Purchase</option>
-                  <option value="other">Other Site Expense</option>
-                </select>
-                <Input
-                  placeholder={expenseMode === 'other' ? 'Expense description *' : 'Detail/Note (e.g. 5 teas, 2 brushes)'}
-                  value={expenseMode === 'other' ? expenseCustom : expenseNote}
-                  onChange={e => expenseMode === 'other' ? setExpenseCustom(e.target.value) : setExpenseNote(e.target.value)}
-                  className="h-10 rounded-xl text-xs"
-                />
-                <Input
-                  type="number"
-                  placeholder="Amount (₹) *"
-                  value={expenseAmount}
-                  onChange={e => setExpenseAmount(e.target.value)}
-                  className="h-10 rounded-xl text-xs font-semibold"
-                />
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={addExpense}
-                className="w-full h-9 rounded-xl text-xs gap-1 font-semibold bg-muted/30 hover:bg-muted"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add Expense Item
-              </Button>
-
-              {expenses.length > 0 && (
-                <div className="space-y-1.5 pt-1">
-                  {expenses.map((exp, idx) => (
-                    <div key={idx} className="flex justify-between items-center bg-muted/40 p-2.5 rounded-xl border border-border/40 text-xs">
-                      <span className="text-foreground font-medium">{exp.itemName}</span>
+                {/* 1. Team Daily Salary */}
+                {(allEmployeeSalaries.length > 0 || unnamedCrewBreakdown.length > 0) && (
+                  <div className="space-y-1.5">
+                    <div
+                      className="flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setShowSalaryBreakdown(v => !v)}
+                    >
+                      <Label className="text-xs font-bold text-foreground flex items-center gap-1.5 cursor-pointer">
+                        <UserCheck className="w-3.5 h-3.5 text-blue-500" /> Team Daily Salary ({totalTeamWorkerCount} Worker{totalTeamWorkerCount !== 1 ? 's' : ''}{totalUnnamedWorkers > 0 ? `: ${allEmployeeSalaries.length} Named, ${totalUnnamedWorkers} Crew` : ''})
+                      </Label>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-foreground">₹{exp.amount.toLocaleString()}</span>
-                        <button type="button" onClick={() => removeExpense(idx)} className="text-destructive hover:opacity-70 p-1">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <span className="text-xs font-bold text-blue-600 dark:text-blue-400">
+                          ₹{totalTeamSalary.toLocaleString()}
+                        </span>
+                        <span className={`text-[10px] text-muted-foreground transition-transform ${showSalaryBreakdown ? 'rotate-180' : ''}`}>▼</span>
                       </div>
                     </div>
-                  ))}
+                    {showSalaryBreakdown && (
+                      <div className="space-y-1.5 animate-slide-up">
+                        {allEmployeeSalaries.map((emp) => (
+                          <div key={emp.staffId} className={`p-3 rounded-xl border flex items-center justify-between text-xs ${
+                            emp.role === 'supervisor'
+                              ? 'bg-blue-500/[0.07] border-blue-500/30'
+                              : 'bg-violet-500/[0.05] border-violet-500/25'
+                          }`}>
+                            <div className="flex items-center gap-2.5">
+                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                                emp.role === 'supervisor'
+                                  ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400'
+                                  : 'bg-violet-500/20 text-violet-600 dark:text-violet-400'
+                              }`}>
+                                <UserCheck className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-foreground">{emp.staffName}</span>
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                    emp.role === 'supervisor'
+                                      ? 'bg-blue-500/20 text-blue-800 dark:text-blue-200'
+                                      : 'bg-violet-500/20 text-violet-800 dark:text-violet-200'
+                                  }`}>
+                                    {emp.role === 'supervisor' ? '👷 Supervisor' : `🧑‍💼 ${emp.role.charAt(0).toUpperCase() + emp.role.slice(1)}`}
+                                  </span>
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                    emp.isHalfDay ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200' : 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200'
+                                  }`}>
+                                    {emp.isHalfDay ? 'Half Day' : 'Full Day'}
+                                    {emp.otHours > 0 ? ` + ${emp.otHours}h OT` : ''}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                  Daily rate: ₹{emp.baseSalary.toLocaleString()}
+                                  {emp.otPay > 0 ? ` · OT: ₹${emp.otPay.toLocaleString()}` : ''}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <span className={`text-sm font-extrabold ${
+                                emp.role === 'supervisor'
+                                  ? 'text-blue-600 dark:text-blue-400'
+                                  : 'text-violet-600 dark:text-violet-400'
+                              }`}>
+                                ₹{emp.totalSalary.toLocaleString()}
+                              </span>
+                              <span className="text-[9px] font-semibold text-emerald-600 dark:text-emerald-400 block">
+                                ✓ Added to Level Cost
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+
+                        {/* Unnamed Crew Members from Labour Allocation */}
+                        {unnamedCrewBreakdown.map((item) => (
+                          <div key={item.trade} className="p-3 rounded-xl border flex items-center justify-between text-xs bg-amber-500/[0.06] border-amber-500/25">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-amber-500/20 text-base">
+                                {item.icon}
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-foreground">{item.label} ({item.totalCount} Crew)</span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-800 dark:text-amber-200">
+                                    👷 Unnamed Crew
+                                  </span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-800 dark:text-emerald-200">
+                                    {item.fullCount > 0 ? `${item.fullCount} Full Day` : ''}{item.halfCount > 0 ? ` · ${item.halfCount} Half Day` : ''}
+                                    {item.otHours > 0 ? ` + ${item.otHours}h OT` : ''}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                  Daily rate: ₹{item.rate.toLocaleString()} / worker
+                                  {item.otPay > 0 ? ` · Total OT: ₹${item.otPay.toLocaleString()}` : ''}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-sm font-extrabold text-amber-700 dark:text-amber-400">
+                                ₹{item.totalPay.toLocaleString()}
+                              </span>
+                              <span className="text-[9px] font-semibold text-emerald-600 dark:text-emerald-400 block">
+                                ✓ Added to Level Cost
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+
+                        <div className="flex justify-between items-center text-xs p-2.5 rounded-xl bg-blue-500/[0.12] border border-blue-500/35 font-bold">
+                          <span className="text-blue-800 dark:text-blue-200">
+                            Total Team Salary ({totalTeamWorkerCount} Workers: {allEmployeeSalaries.length} Named, {totalUnnamedWorkers} Unnamed)
+                          </span>
+                          <span className="text-blue-700 dark:text-blue-300 text-sm">₹{totalTeamSalary.toLocaleString()}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2. Site Daily Expenses */}
+                <div className="space-y-2 pt-1 border-t border-border/40">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <IndianRupee className="w-3.5 h-3.5 text-amber-500" /> Site Daily Expenses (Food, Petrol, Materials)
+                    </Label>
+                    <span className="text-xs font-bold text-destructive">
+                      Total Expenses: ₹{(expenses.reduce((s, e) => s + (e.amount || 0), 0) + (supervisorExpense?.amount || 0)).toLocaleString()}
+                    </span>
+                  </div>
+
+                  {/* Supervisor Attendance Site Expense from Team Attendance */}
+                  {supervisorExpense && (
+                    <div className="mb-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
+                          <IndianRupee className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-foreground">
+                              Supervisor Site Expense (from Team Attendance)
+                            </span>
+                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-800 dark:text-amber-200">
+                              {supervisorExpense.method}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">
+                            {supervisorExpense.notes}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-sm font-extrabold text-amber-700 dark:text-amber-300">
+                          ₹{supervisorExpense.amount.toLocaleString()}
+                        </span>
+                        <span className="text-[9px] font-semibold text-muted-foreground block">
+                          Auto-added on site
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <select
+                        value={expenseMode}
+                        onChange={e => setExpenseMode(e.target.value as any)}
+                        className="h-10 rounded-xl border border-input bg-card px-3 text-xs font-semibold"
+                      >
+                        <option value="food">Site Food & Tea for Crew</option>
+                        <option value="bike_petrol">Bike Petrol / Fuel</option>
+                        <option value="auto">Auto / Cab Fare</option>
+                        <option value="bus">Bus / Train Fare</option>
+                        <option value="materials">Local Materials / Hardware</option>
+                        <option value="tools">Tool Hire / Purchase</option>
+                        <option value="other">Other Site Expense</option>
+                      </select>
+                      <Input
+                        placeholder={expenseMode === 'other' ? 'Expense description *' : 'Detail/Note (e.g. 5 teas, 2 brushes)'}
+                        value={expenseMode === 'other' ? expenseCustom : expenseNote}
+                        onChange={e => expenseMode === 'other' ? setExpenseCustom(e.target.value) : setExpenseNote(e.target.value)}
+                        className="h-10 rounded-xl text-xs"
+                      />
+                      <Input
+                        type="number"
+                        placeholder="Amount (₹) *"
+                        value={expenseAmount}
+                        onChange={e => setExpenseAmount(e.target.value)}
+                        className="h-10 rounded-xl text-xs font-semibold"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addExpense}
+                      className="w-full h-9 rounded-xl text-xs gap-1 font-semibold bg-muted/30 hover:bg-muted"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Expense Item
+                    </Button>
+
+                    {expenses.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        {expenses.map((exp, idx) => (
+                          <div key={idx} className="flex justify-between items-center bg-muted/40 p-2.5 rounded-xl border border-border/40 text-xs">
+                            <span className="text-foreground font-medium">{exp.itemName}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-foreground">₹{exp.amount.toLocaleString()}</span>
+                              <button type="button" onClick={() => removeExpense(idx)} className="text-destructive hover:opacity-70 p-1">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
 
-          {/* Client Income Received */}
-          <div>
-            <Label className="text-xs font-semibold text-muted-foreground block mb-1.5">
-              Income Collected from Client Today (if any)
-            </Label>
-            <Input
-              type="number"
-              placeholder="₹ 0"
-              value={income}
-              onChange={e => setIncome(e.target.value)}
-              className="h-10 rounded-xl text-xs font-semibold"
-            />
-          </div>
+                {/* Client Income Received */}
+                <div className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.04] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <IndianRupee className="w-3.5 h-3.5 text-emerald-600" /> Income Collected from Client Today (if any)
+                    </Label>
+                    <span className="text-[10px] text-muted-foreground">Select payment mode if received</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <Label className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">
+                        Amount (₹)
+                      </Label>
+                      <Input
+                        type="number"
+                        placeholder="₹ 0"
+                        value={income}
+                        onChange={e => setIncome(e.target.value)}
+                        className="h-10 rounded-xl text-xs font-bold bg-card"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">
+                        Payment Method
+                      </Label>
+                      <Select
+                        value={incomePaymentMethod}
+                        onValueChange={(val: any) => setIncomePaymentMethod(val)}
+                      >
+                        <SelectTrigger className="h-10 rounded-xl text-xs bg-card border-border/60">
+                          <SelectValue placeholder="Payment Mode" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Cash">💵 Cash</SelectItem>
+                          <SelectItem value="UPI">📱 UPI / GPay / PhonePe</SelectItem>
+                          <SelectItem value="Bank Transfer">🏦 Bank Transfer (NEFT/IMPS)</SelectItem>
+                          <SelectItem value="Cheque">📝 Cheque</SelectItem>
+                          <SelectItem value="Card">💳 Card</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
 
-          <Button
-            type="submit"
-            className="w-full h-12 rounded-xl font-bold text-white text-sm shadow-md mt-2"
-            style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
-          >
-            Submit Daily Work Entry
-          </Button>
-            </div>
-          </div>
+                <Button
+                  type="submit"
+                  className="w-full h-12 rounded-xl font-bold text-white text-sm shadow-md mt-2"
+                  style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
+                >
+                  {editingLogId ? 'Update Daily Work Entry' : 'Submit Daily Work Entry'}
+                </Button>
+              </div>
+            </>
+          )}
         </div>
-      </form>
+      </div>
+    </form>
 
       {/* Level Completion Request Modal */}
       <Dialog open={isCompletionModalOpen} onOpenChange={setIsCompletionModalOpen}>

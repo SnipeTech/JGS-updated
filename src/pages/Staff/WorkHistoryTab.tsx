@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Clock, MapPin, Users, Search, Layers } from 'lucide-react';
+import { Clock, MapPin, Users, Search, Layers, UserCheck } from 'lucide-react';
 import { Staff } from '@/types';
 
 interface WorkHistoryTabProps {
@@ -70,7 +70,7 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
                   </p>
                   {log.transportCost && log.transportCost > 0 ? (
                     <p className="text-xs text-muted-foreground capitalize">
-                      {log.transportMode || 'Transport'} · ₹{log.transportCost}
+                      {log.transportMode || 'Transport'} &middot; &#8377;{log.transportCost}
                     </p>
                   ) : null}
                 </div>
@@ -111,39 +111,64 @@ export const WorkHistoryTab = ({ staff }: WorkHistoryTabProps) => {
                 </div>
               )}
 
+              {/* Team Salary Breakdown */}
+              {log.employeeSalaries && log.employeeSalaries.length > 0 ? (
+                <div className="bg-blue-500/[0.06] rounded-xl p-2.5 mt-2 border border-blue-500/20 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-blue-700 dark:text-blue-300 font-bold tracking-wider uppercase flex items-center gap-1">
+                      <UserCheck className="w-3 h-3" /> Team Daily Salary ({log.employeeSalaries.length})
+                    </span>
+                    <span className="text-xs font-bold text-blue-700 dark:text-blue-300">
+                      &#8377;{log.employeeSalaries.reduce((s, e) => s + e.totalSalary, 0).toLocaleString()}
+                    </span>
+                  </div>
+                  {log.employeeSalaries.map((emp, i) => (
+                    <div key={i} className="flex justify-between items-center text-xs py-0.5">
+                      <span className="flex items-center gap-1.5">
+                        <span className="font-semibold">{emp.staffName}</span>
+                        <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${emp.role === 'supervisor' ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300' : 'bg-violet-500/20 text-violet-700 dark:text-violet-300'}`}>
+                          {emp.role}
+                        </span>
+                        <span className="text-[9px] text-muted-foreground">
+                          {emp.isHalfDay ? '&#189; Day' : 'Full'}{emp.otHours > 0 ? ` +${emp.otHours}h OT` : ''}
+                        </span>
+                      </span>
+                      <span className={`font-bold ${emp.role === 'supervisor' ? 'text-blue-700 dark:text-blue-300' : 'text-violet-700 dark:text-violet-300'}`}>
+                        &#8377;{emp.totalSalary.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : log.supervisorSalary && log.supervisorSalary > 0 ? (
+                <div className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-800 dark:text-blue-200 mt-2">
+                  <span className="font-semibold flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5 text-blue-600" /> Supervisor Daily Salary
+                  </span>
+                  <span className="font-bold text-blue-700 dark:text-blue-300">&#8377;{log.supervisorSalary.toLocaleString()}</span>
+                </div>
+              ) : null}
+
               {((log.expenses && log.expenses.length > 0) || (log.transportCost && log.transportCost > 0)) && (
                 <div className="bg-muted/40 rounded-xl p-2.5 mt-2">
                   <p className="text-[9px] text-muted-foreground font-bold tracking-wider uppercase mb-1">Expenses</p>
                   {log.expenses?.map((e, i) => (
                     <div key={i} className="flex justify-between text-xs py-0.5">
                       <span className="capitalize">{e.itemName}</span>
-                      <span className="font-semibold text-destructive">₹{e.amount}</span>
+                      <span className="font-semibold text-destructive">&#8377;{e.amount}</span>
                     </div>
                   ))}
                   {log.transportCost && log.transportCost > 0 ? (
                     <div className="flex justify-between text-xs py-0.5">
                       <span className="capitalize">{log.transportMode || 'Transport'}</span>
-                      <span className="font-semibold text-destructive">₹{log.transportCost}</span>
+                      <span className="font-semibold text-destructive">&#8377;{log.transportCost}</span>
                     </div>
                   ) : null}
                 </div>
               )}
 
-              {log.materials && log.materials.length > 0 && (
-                <div className="bg-muted/40 rounded-xl p-2.5 mt-2">
-                  <p className="text-[9px] text-muted-foreground font-bold tracking-wider uppercase mb-1">Materials Used</p>
-                  {log.materials.map((m, i) => (
-                    <div key={i} className="flex justify-between text-xs py-0.5">
-                      <span className="font-medium text-foreground">{m.name} × {m.quantity}</span>
-                      <span className="text-[10px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded">Recorded</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
               {log.incomeFromClient > 0 && (
                 <p className="text-xs text-success font-semibold mt-2 pt-1 border-t border-border/40">
-                  Received from Client: ₹{log.incomeFromClient.toLocaleString()}
+                  Received from Client: &#8377;{log.incomeFromClient.toLocaleString()}
                 </p>
               )}
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { format } from 'date-fns';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,12 +9,14 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { toast } from 'sonner';
 import { Package, Users, ShieldCheck, Plus, Trash2, CheckCircle2, AlertCircle, Ruler, Tag } from 'lucide-react';
 import { TabId } from '../AdminDashboard';
+import { MATERIAL_CATEGORIES } from '@/types';
 
 const ADMIN_TABS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'sites', label: 'Sites' },
-  { id: 'settings', label: 'Settings & Master Data' },
   { id: 'materials', label: 'Materials & Suppliers' },
+  { id: 'vehicles', label: 'Vehicles & Fuel' },
+  { id: 'settings', label: 'Settings & Master Data' },
   { id: 'payroll', label: 'Payroll & Salaries' },
   { id: 'staff', label: 'Staff Management' },
   { id: 'attendance', label: 'Attendance' },
@@ -25,19 +28,21 @@ export const SettingsTab = () => {
   const {
     materialSettings, addMaterialSetting, deleteMaterialSetting,
     labourTypes, addLabourType, removeLabourType,
-    paymentStageMaster, addPaymentStageMaster, removePaymentStageMaster,
     unitMaster, addUnit, removeUnit,
-    staffList, updateStaff
+    staffList, updateStaff,
+    sites, addMaterialRental
   } = useApp();
 
-  const [activeSection, setActiveSection] = useState<'materials' | 'labour' | 'units' | 'admins' | 'payment_stages'>('materials');
+  const [activeSection, setActiveSection] = useState<'materials' | 'labour' | 'units' | 'admins'>('materials');
 
   // Material State
   const [matName, setMatName] = useState('');
+  const [matCategory, setMatCategory] = useState<string>('Civil & Structural');
   const [matUnit, setMatUnit] = useState('Kg');
   const [matRate, setMatRate] = useState('');
   const [isRental, setIsRental] = useState(false);
   const [rentalRatePerDay, setRentalRatePerDay] = useState('');
+  const [rentalSiteId, setRentalSiteId] = useState('');
   const [matFilter, setMatFilter] = useState<'all' | 'standard' | 'rental'>('all');
 
   // Labour State
@@ -46,27 +51,49 @@ export const SettingsTab = () => {
   // Units State
   const [newUnitName, setNewUnitName] = useState('');
 
-  // Payment Stage State
-  const [stageName, setStageName] = useState('');
-
-  // Admin State
-  const admins = staffList.filter(s => s.role === 'admin');
-  const [selectedAdminId, setSelectedAdminId] = useState<string>('');
-
+  // Admin Permissions State
+  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [newStaffPassword, setNewStaffPassword] = useState('');
   const handleAddMaterial = (e: React.FormEvent) => {
     e.preventDefault();
     if (!matName.trim()) return toast.error('Material name required');
+
+    const newMatId = `mat_${Date.now()}`;
     addMaterialSetting({
       name: matName.trim(),
+      category: matCategory.trim() || 'General',
       unit: matUnit,
-      defaultRate: Number(matRate) || 0,
+      defaultRate: 0,
       isRental,
-      rentalRatePerDay: isRental ? (Number(rentalRatePerDay) || Number(matRate) || 0) : undefined
+      rentalRatePerDay: isRental ? (Number(rentalRatePerDay) || 0) : undefined
     });
-    toast.success(isRental ? 'Rental material added to catalog' : 'Material added to catalog');
+
+    if (isRental && rentalSiteId && rentalSiteId !== 'none') {
+      const targetSite = sites.find(s => s.id === rentalSiteId);
+      if (targetSite) {
+        addMaterialRental({
+          materialId: newMatId,
+          materialName: matName.trim(),
+          siteId: targetSite.id,
+          siteName: targetSite.name,
+          startDate: format(new Date(), 'yyyy-MM-dd'),
+          quantity: 1,
+          unit: matUnit || 'Nos',
+          rentalRatePerDay: Number(rentalRatePerDay) || 0,
+          status: 'active',
+          notes: 'Deployed via Material Catalog'
+        });
+        toast.success(`Rental material added to catalog & deployed to ${targetSite.name}!`);
+      }
+    } else {
+      toast.success(isRental ? 'Rental material added to catalog' : 'Material added to catalog');
+    }
+
     setMatName('');
+    setMatCategory('Civil & Structural');
     setMatRate('');
     setRentalRatePerDay('');
+    setRentalSiteId('');
     setIsRental(false);
   };
 
@@ -104,28 +131,66 @@ export const SettingsTab = () => {
     }
   };
 
-  const handleAddPaymentStage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stageName.trim()) return toast.error('Payment stage name required');
-    if (paymentStageMaster.includes(stageName.trim())) return toast.error('Stage already exists');
-    addPaymentStageMaster(stageName.trim());
-    toast.success('Payment stage added');
-    setStageName('');
+  const toggleAdminPermission = (staffId: string, tabId: string) => {
+    const staff = staffList.find(s => s.id === staffId);
+    if (!staff) return;
+
+    const currentPerms = Array.isArray(staff.adminPermissions)
+      ? [...staff.adminPermissions]
+      : (staff.role === 'admin' ? ADMIN_TABS.map(t => t.id) : []);
+
+    let nextPerms: string[];
+    if (currentPerms.includes(tabId)) {
+      nextPerms = currentPerms.filter(p => p !== tabId);
+    } else {
+      nextPerms = [...currentPerms, tabId];
+    }
+
+    updateStaff(staffId, {
+      role: 'admin',
+      adminPermissions: nextPerms
+    });
+    toast.success('Admin permissions updated');
   };
 
-  const toggleAdminPermission = (adminId: string, tabId: string) => {
-    const admin = admins.find(a => a.id === adminId);
-    if (!admin) return;
-    
-    // Superadmin has all permissions, regular admins have custom ones
-    let perms = admin.adminPermissions || ADMIN_TABS.map(t => t.id);
-    if (perms.includes(tabId)) {
-      perms = perms.filter(p => p !== tabId);
-    } else {
-      perms = [...perms, tabId];
+  const grantAllPermissions = (staffId: string) => {
+    updateStaff(staffId, {
+      role: 'admin',
+      adminPermissions: ADMIN_TABS.map(t => t.id)
+    });
+    toast.success('Granted access to all 10 tabs');
+  };
+
+  const revokeAllPermissions = (staffId: string) => {
+    updateStaff(staffId, {
+      adminPermissions: []
+    });
+    toast.success('Revoked access to all tabs (0 tabs permitted)');
+  };
+
+  const handleUpdatePassword = (staffId: string) => {
+    if (!newStaffPassword.trim()) {
+      return toast.error('Please enter a password');
     }
-    updateStaff(adminId, { adminPermissions: perms });
-    toast.success('Permissions updated');
+    updateStaff(staffId, { password: newStaffPassword.trim() });
+    toast.success('Staff login password updated');
+    setNewStaffPassword('');
+  };
+
+  const handleToggleAdminRole = (staffId: string, makeAdmin: boolean) => {
+    if (makeAdmin) {
+      updateStaff(staffId, {
+        role: 'admin',
+        adminPermissions: ADMIN_TABS.map(t => t.id)
+      });
+      toast.success('Promoted to Admin with all tab permissions');
+    } else {
+      updateStaff(staffId, {
+        role: 'supervisor',
+        adminPermissions: []
+      });
+      toast.success('Demoted from Admin (reverted to Supervisor)');
+    }
   };
 
   return (
@@ -170,25 +235,28 @@ export const SettingsTab = () => {
         >
           <ShieldCheck className="w-3.5 h-3.5" /> Admin Permissions
         </button>
-        <button
-          onClick={() => setActiveSection('payment_stages')}
-          className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
-            activeSection === 'payment_stages' ? 'bg-emerald-600 text-white shadow-sm' : 'text-muted-foreground hover:bg-muted'
-          }`}
-        >
-          <CheckCircle2 className="w-3.5 h-3.5" /> Payment Stages
-        </button>
       </div>
 
       {activeSection === 'materials' && (
         <Card className="p-4 rounded-2xl border-border/50 shadow-sm space-y-4">
           <form onSubmit={handleAddMaterial} className="p-3 bg-muted/20 rounded-xl border border-border/40 space-y-3">
             <div className="flex flex-wrap items-end gap-3">
-              <div className="flex-1 min-w-[200px]">
+              <div className="flex-1 min-w-[180px]">
                 <Label className="text-xs font-semibold">Material Name *</Label>
                 <Input value={matName} onChange={e => setMatName(e.target.value)} placeholder="e.g. Steel Scaffolding Set, Cement 50kg" className="mt-1 h-9 text-xs" />
               </div>
-              <div className="w-[140px]">
+              <div className="w-[160px]">
+                <Label className="text-xs font-semibold">Category *</Label>
+                <Select value={matCategory} onValueChange={setMatCategory}>
+                  <SelectTrigger className="mt-1 h-9 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {MATERIAL_CATEGORIES.map(cat => (
+                      <SelectItem key={cat} value={cat} className="text-xs">{cat}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="w-[120px]">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-semibold">Unit</Label>
                   <button
@@ -209,10 +277,6 @@ export const SettingsTab = () => {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="w-[120px]">
-                <Label className="text-xs font-semibold">Default Rate (₹)</Label>
-                <Input type="number" value={matRate} onChange={e => setMatRate(e.target.value)} placeholder="0" className="mt-1 h-9 text-xs" />
-              </div>
               <Button type="submit" className="h-9 gap-1 text-xs"><Plus className="w-3.5 h-3.5" /> Add Material</Button>
             </div>
 
@@ -229,15 +293,33 @@ export const SettingsTab = () => {
               </label>
 
               {isRental && (
-                <div className="flex items-center gap-2 pl-2 border-l border-border/40">
-                  <Label className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Rental Rate (₹/day per {matUnit}):</Label>
-                  <Input
-                    type="number"
-                    value={rentalRatePerDay}
-                    onChange={e => setRentalRatePerDay(e.target.value)}
-                    placeholder={matRate || '50'}
-                    className="h-8 w-28 text-xs font-semibold text-amber-600"
-                  />
+                <div className="flex flex-wrap items-center gap-3 pl-2 border-l border-border/40">
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Rental Rate (₹/day per {matUnit}):</Label>
+                    <Input
+                      type="number"
+                      value={rentalRatePerDay}
+                      onChange={e => setRentalRatePerDay(e.target.value)}
+                      placeholder={matRate || '50'}
+                      className="h-8 w-24 text-xs font-semibold text-amber-600"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Deploy to Site:</Label>
+                    <Select value={rentalSiteId} onValueChange={setRentalSiteId}>
+                      <SelectTrigger className="h-8 w-44 text-xs">
+                        <SelectValue placeholder="Catalog Only (No Site)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Catalog Only (No Site)</SelectItem>
+                        {sites.filter(s => s.status !== 'completed').map(s => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               )}
             </div>
@@ -284,8 +366,11 @@ export const SettingsTab = () => {
                   m.isRental ? 'border-amber-500/30 bg-amber-500/5' : 'border-border/50'
                 }`}>
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <h4 className="text-sm font-bold text-foreground">{m.name}</h4>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">
+                        {m.category || 'General'}
+                      </span>
                       {m.isRental ? (
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
                           Rental Item
@@ -297,11 +382,9 @@ export const SettingsTab = () => {
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {m.unit} — {m.isRental ? (
-                        <strong className="text-amber-700 dark:text-amber-300">₹{m.rentalRatePerDay || m.defaultRate || 0} / day</strong>
-                      ) : (
-                        <span>₹{m.defaultRate || 0} / unit</span>
-                      )}
+                      Unit: {m.unit || 'Unit'} {m.isRental && m.rentalRatePerDay ? (
+                        <>— <strong className="text-amber-700 dark:text-amber-300">₹{m.rentalRatePerDay} / day</strong></>
+                      ) : null}
                     </p>
                   </div>
                   <Button variant="ghost" size="icon" onClick={() => deleteMaterialSetting(m.id)} className="h-8 w-8 text-destructive hover:bg-destructive/10 rounded-lg">
@@ -427,85 +510,226 @@ export const SettingsTab = () => {
         </Card>
       )}
 
-      {activeSection === 'payment_stages' && (
-        <Card className="p-4 rounded-2xl border-border/50 shadow-sm space-y-4">
-          <form onSubmit={handleAddPaymentStage} className="flex items-end gap-3 p-3 bg-muted/20 rounded-xl border border-border/40">
-            <div className="flex-1 max-w-sm">
-              <Label className="text-xs font-semibold">New Payment Stage *</Label>
-              <Input value={stageName} onChange={e => setStageName(e.target.value)} placeholder="e.g. Level 1, Foundation, Roofing" className="mt-1 h-9 text-xs" />
-            </div>
-            <Button type="submit" className="h-9 gap-1 text-xs bg-emerald-600 hover:bg-emerald-700"><Plus className="w-3.5 h-3.5" /> Add Stage</Button>
-          </form>
+      {activeSection === 'admins' && (() => {
+        const adminStaff = staffList.filter(s => s.role === 'admin');
+        const nonAdminStaff = staffList.filter(s => s.role !== 'admin');
+        const selectedStaff = staffList.find(s => s.id === selectedStaffId);
+        const isSelectedAdmin = selectedStaff?.role === 'admin';
+        const allowedCount = selectedStaff
+          ? (Array.isArray(selectedStaff.adminPermissions)
+              ? selectedStaff.adminPermissions.length
+              : (isSelectedAdmin ? ADMIN_TABS.length : 0))
+          : 0;
 
-          <div className="flex flex-col gap-2">
-            {paymentStageMaster.map((stage, i) => (
-              <div key={stage} className="flex items-center justify-between p-3 rounded-xl border border-border/60 bg-card">
-                <div className="flex items-center gap-3">
-                  <div className="w-6 h-6 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-[10px] font-bold">
-                    {i + 1}
-                  </div>
-                  <span className="text-sm font-bold">{stage}</span>
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => removePaymentStageMaster(stage)} className="h-8 w-8 text-destructive hover:bg-destructive/10 rounded-lg">
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+        return (
+          <Card className="p-4 rounded-2xl border-border/50 shadow-sm space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3 pb-2 border-b border-border/40">
+              <div>
+                <h4 className="text-sm font-bold flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  Admin Permissions & Role Management
+                </h4>
+                <p className="text-xs text-muted-foreground">
+                  Control which tabs each administrator can view. Staff members promoted to Admin can log in via their phone/ID.
+                </p>
               </div>
-            ))}
-            {paymentStageMaster.length === 0 && (
-              <p className="text-xs text-muted-foreground p-4 text-center">No payment stages defined yet.</p>
-            )}
-          </div>
-        </Card>
-      )}
 
-      {activeSection === 'admins' && (
-        <Card className="p-4 rounded-2xl border-border/50 shadow-sm space-y-4">
-          <div className="flex items-center gap-3 mb-2 flex-wrap">
-            <Label className="text-xs font-bold uppercase text-muted-foreground">Select Admin to Manage:</Label>
-            <Select value={selectedAdminId} onValueChange={setSelectedAdminId}>
-              <SelectTrigger className="h-9 w-64 text-xs font-semibold bg-muted/30">
-                <SelectValue placeholder="Select Admin" />
-              </SelectTrigger>
-              <SelectContent>
-                {admins.map(a => (
-                  <SelectItem key={a.id} value={a.id}>{a.name} ({a.phone})</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {!selectedAdminId ? (
-            <div className="p-6 text-center border border-dashed border-border/50 rounded-xl bg-muted/10">
-              <ShieldCheck className="w-8 h-8 mx-auto text-muted-foreground mb-2 opacity-50" />
-              <p className="text-xs text-muted-foreground">Select an admin above to manage their tab access permissions.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-purple-700 dark:text-purple-300 text-xs flex gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>Toggle the switches below to grant or revoke access to specific areas of the Admin Workspace. The default 'admin' login always has full access.</span>
+              <div className="flex items-center gap-2">
+                <Select value={selectedStaffId} onValueChange={setSelectedStaffId}>
+                  <SelectTrigger className="h-9 w-72 text-xs font-semibold bg-muted/30">
+                    <SelectValue placeholder="Select Staff / Admin to manage" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {adminStaff.length > 0 && (
+                      <div className="p-1">
+                        <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">
+                          Administrators ({adminStaff.length})
+                        </div>
+                        {adminStaff.map(a => (
+                          <SelectItem key={a.id} value={a.id}>
+                            🛡️ {a.name} ({a.phone || 'No phone'})
+                          </SelectItem>
+                        ))}
+                      </div>
+                    )}
+                    {nonAdminStaff.length > 0 && (
+                      <div className="p-1">
+                        <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          Staff / Supervisors ({nonAdminStaff.length})
+                        </div>
+                        {nonAdminStaff.map(s => (
+                          <SelectItem key={s.id} value={s.id}>
+                            👤 {s.name} ({s.phone || 'No phone'}) — {s.role}
+                          </SelectItem>
+                        ))}
+                      </div>
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {ADMIN_TABS.map(tab => {
-                  const admin = admins.find(a => a.id === selectedAdminId);
-                  const hasAccess = admin?.adminPermissions ? admin.adminPermissions.includes(tab.id) : true;
-                  
-                  return (
-                    <div key={tab.id} className={`flex items-center justify-between p-3 rounded-xl border transition-colors cursor-pointer ${
-                      hasAccess ? 'border-purple-500/40 bg-purple-500/5' : 'border-border/60 bg-card opacity-60 hover:opacity-100'
-                    }`} onClick={() => toggleAdminPermission(selectedAdminId, tab.id)}>
-                      <span className="text-xs font-bold">{tab.label}</span>
-                      <div className={`w-5 h-5 rounded-full flex items-center justify-center ${hasAccess ? 'bg-purple-600 text-white' : 'bg-muted-foreground/30 text-transparent'}`}>
-                        <CheckCircle2 className="w-3.5 h-3.5" />
+            </div>
+
+            {!selectedStaff ? (
+              <div className="p-8 text-center border border-dashed border-border/60 rounded-2xl bg-muted/10 space-y-2">
+                <ShieldCheck className="w-10 h-10 mx-auto text-purple-500/50" />
+                <h5 className="text-sm font-bold">No Staff or Administrator Selected</h5>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  Select a staff member or administrator from the dropdown above to grant, revoke, or customize access to specific tabs in the Admin Workspace.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Staff summary strip */}
+                <div className="p-4 rounded-xl border border-purple-500/20 bg-purple-500/5 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold text-base">
+                      {selectedStaff.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm">{selectedStaff.name}</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          isSelectedAdmin
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-muted text-muted-foreground border'
+                        }`}>
+                          {isSelectedAdmin ? 'Admin Role' : `Role: ${selectedStaff.role}`}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
+                        <span>📞 {selectedStaff.phone || 'No phone'}</span>
+                        <span>•</span>
+                        <span className="font-semibold text-purple-700 dark:text-purple-300">
+                          Allowed: {allowedCount} / {ADMIN_TABS.length} Tabs
+                        </span>
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
+
+                  {/* Actions & quick tools */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => grantAllPermissions(selectedStaff.id)}
+                      className="h-8 text-xs font-bold gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Grant All
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => revokeAllPermissions(selectedStaff.id)}
+                      className="h-8 text-xs font-bold gap-1 border-destructive/40 text-destructive hover:bg-destructive/10"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5" /> Revoke All
+                    </Button>
+                    {isSelectedAdmin ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleToggleAdminRole(selectedStaff.id, false)}
+                        className="h-8 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                        title="Demote to Supervisor"
+                      >
+                        Demote to Supervisor
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={() => handleToggleAdminRole(selectedStaff.id, true)}
+                        className="h-8 text-xs bg-purple-600 hover:bg-purple-700 text-white font-bold"
+                      >
+                        Promote to Admin
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Password Configuration */}
+                <div className="p-3 bg-muted/20 rounded-xl border border-border/40 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">Login Password:</span>
+                    {selectedStaff.password ? (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-medium">✓ Configured (Ready to log in)</span>
+                    ) : (
+                      <span className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5" /> No password set — user cannot log in
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="password"
+                      placeholder="Set new password..."
+                      value={newStaffPassword}
+                      onChange={e => setNewStaffPassword(e.target.value)}
+                      className="h-8 w-44 text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => handleUpdatePassword(selectedStaff.id)}
+                      className="h-8 text-xs bg-primary"
+                    >
+                      Save Password
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Tab Permissions Grid */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <Label className="font-bold text-muted-foreground uppercase text-[11px]">
+                      Tab Access Permissions ({ADMIN_TABS.length} Workspace Areas)
+                    </Label>
+                    <span className="text-muted-foreground text-[11px]">
+                      Click any card to toggle permission
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                    {ADMIN_TABS.map(tab => {
+                      const hasAccess = Array.isArray(selectedStaff.adminPermissions)
+                        ? selectedStaff.adminPermissions.includes(tab.id)
+                        : (isSelectedAdmin ? true : false);
+
+                      return (
+                        <div
+                          key={tab.id}
+                          onClick={() => toggleAdminPermission(selectedStaff.id, tab.id)}
+                          className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer select-none ${
+                            hasAccess
+                              ? 'border-purple-500/50 bg-purple-500/10 shadow-sm'
+                              : 'border-border/60 bg-card/60 opacity-60 hover:opacity-100 hover:border-border'
+                          }`}
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-foreground">{tab.label}</div>
+                            <div className="text-[10px] text-muted-foreground mt-0.5">
+                              {hasAccess ? (
+                                <span className="text-purple-600 dark:text-purple-400 font-semibold">Access Allowed</span>
+                              ) : (
+                                <span>Restricted</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center transition-all ${
+                            hasAccess
+                              ? 'bg-purple-600 text-white shadow-sm'
+                              : 'bg-muted border border-border text-transparent'
+                          }`}>
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            </div>
-          )}
-        </Card>
-      )}
+            )}
+          </Card>
+        );
+      })()}
     </div>
   );
 };

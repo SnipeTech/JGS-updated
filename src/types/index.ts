@@ -23,6 +23,7 @@ export interface SitePayment {
   amount: number;
   date: string;
   note: string;
+  paymentMethod?: string;
 }
 
 export interface SitePaymentStage {
@@ -124,6 +125,7 @@ export interface ManualExpense {
   category: string;
   description: string;
   workLevelStage?: string;
+  paymentMethod?: string;
 }
 
 export interface Vendor {
@@ -176,21 +178,35 @@ export interface DailyLog {
   transportCost?: number;
   expenses?: { itemName: string, amount: number }[];
   incomeFromClient: number;
+  incomePaymentMethod?: string;
   notes: string;
   workerIds?: string[];
   workerCounts?: LabourCount;
   workLevelStage?: string;
+  supervisorSalary?: number;
+  employeeSalaries?: {
+    staffId: string;
+    staffName: string;
+    role: string;
+    baseSalary: number;
+    isHalfDay: boolean;
+    otHours: number;
+    otPay: number;
+    totalSalary: number;
+  }[];
 }
 
 export interface LabourCount {
-  painter: number;
-  plumber: number;
-  labour: number;
+  painter?: number;
+  plumber?: number;
+  labour?: number;
+  [key: string]: number | undefined;
 }
 
 export interface SiteAssignment {
   siteId: string;
   counts: LabourCount;
+  halfDayCounts?: LabourCount;
 }
 
 export interface Attendance {
@@ -205,7 +221,13 @@ export interface Attendance {
   notes?: string;
   manCount?: number;
   siteId?: string;
+  siteName?: string;
+  expenseAmount?: number;
+  expenseNotes?: string;
+  expensePaymentMethod?: string;
+  expenses?: { itemName: string; amount: number }[];
   presentCounts?: LabourCount;
+  halfDayCounts?: LabourCount;
   siteAssignments?: SiteAssignment[];
   unnamedOtHours?: number;
   unnamedOtStaffCount?: number;
@@ -217,12 +239,25 @@ export interface Attendance {
 export interface MaterialSetting {
   id: string;
   name: string;
+  category?: string;
   unit: string;
   perUnitWeight?: string;
   defaultRate?: number;
   isRental?: boolean;
   rentalRatePerDay?: number;
 }
+
+export const MATERIAL_CATEGORIES = [
+  'Civil & Structural',
+  'Masonry & Concrete',
+  'Paints & Finishing',
+  'Plumbing & Sanitary',
+  'Electrical & Wiring',
+  'Carpentry & Woodwork',
+  'Scaffolding & Rental Tools',
+  'Hardware & Consumables',
+  'Other'
+] as const;
 
 export interface MaterialRental {
   id: string;
@@ -272,6 +307,18 @@ export interface MaterialRequestItem {
   clientAmount?: number;   // calculated amount for client: quantity * clientRate (₹)
   customerRate?: number;   // unit rate for customer (₹)
   customerAmount?: number; // calculated amount for customer: quantity * customerRate (₹)
+
+  // Per-product Tax & GST:
+  gstType?: 'none' | 'igst' | 'cgst_sgst';
+  gstRate?: number;
+  igstRate?: number;
+  cgstRate?: number;
+  sgstRate?: number;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
+  gstAmount?: number;
+  totalWithGst?: number;
 }
 
 export interface Vehicle {
@@ -279,6 +326,29 @@ export interface Vehicle {
   name: string;
   number: string;
   type: string; // 'Pickup' | 'JCB' | 'Lorry / Tipper' | 'Mini Truck (Tata Ace)' | 'Tractor' | 'Three Wheeler (Auto)' | 'Other'
+  status?: 'Active' | 'Under Maintenance' | 'Idle' | 'Out of Service' | string;
+  fuelType?: 'Diesel' | 'Petrol' | 'Electric' | 'CNG' | string;
+  assignedDriverId?: string;
+  assignedDriverName?: string;
+  odometer?: number;
+  insuranceExpiry?: string;
+  fitnessExpiry?: string;
+  notes?: string;
+  createdAt?: string;
+}
+
+export interface VehicleMaintenanceRecord {
+  id: string;
+  vehicleId: string;
+  vehicleName: string;
+  vehicleNumber: string;
+  date: string;
+  type: 'Regular Service' | 'Oil Change' | 'Tyre Replacement' | 'Brake Service' | 'Engine Repair' | 'Body Work' | 'Insurance / Tax' | 'Other' | string;
+  cost: number;
+  odometerReading?: number;
+  workshopName?: string;
+  billNumber?: string;
+  nextServiceDueDate?: string;
   notes?: string;
   createdAt?: string;
 }
@@ -362,6 +432,9 @@ export interface MaterialRequest {
   igstRate?: number;
   cgstRate?: number;
   sgstRate?: number;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
   gstAmount?: number;
   
   completedAt?: string;
@@ -382,11 +455,12 @@ export interface AppState {
   materialSettings: MaterialSetting[];
   suppliers: Supplier[];
   vehicles: Vehicle[];
+  vehicleMaintenance: VehicleMaintenanceRecord[];
   materialRequests: MaterialRequest[];
   labourTypes: string[];
   paymentStageMaster: string[];
   unitMaster: string[];
   materialRentals: MaterialRental[];
   stageCompletionRequests: StageCompletionRequest[];
-  currentUser: { id: string; role: 'admin' | 'staff'; adminPermissions?: string[] } | null;
+  currentUser: { id: string; name?: string; role: 'admin' | 'staff'; adminPermissions?: string[] } | null;
 }

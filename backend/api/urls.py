@@ -5,7 +5,7 @@ from .views import (
     QuotationViewSet, ManualExpenseViewSet, VendorViewSet,
     WorkEntryViewSet, DailyLogViewSet, AttendanceViewSet,
     MaterialSettingViewSet, MaterialRentalViewSet, SupplierViewSet,
-    VehicleViewSet, MaterialRequestViewSet, PayrollPaidStatusViewSet,
+    VehicleViewSet, VehicleMaintenanceViewSet, MaterialRequestViewSet, PayrollPaidStatusViewSet,
     PayrollHistoryViewSet, AppConfigViewSet, health_check, sync_app_state
 )
 
@@ -24,6 +24,7 @@ router.register(r'material-settings', MaterialSettingViewSet, basename='material
 router.register(r'material-rentals', MaterialRentalViewSet, basename='material-rentals')
 router.register(r'suppliers', SupplierViewSet, basename='suppliers')
 router.register(r'vehicles', VehicleViewSet, basename='vehicles')
+router.register(r'vehicle-maintenance', VehicleMaintenanceViewSet, basename='vehicle-maintenance')
 router.register(r'material-requests', MaterialRequestViewSet, basename='material-requests')
 router.register(r'payroll-status', PayrollPaidStatusViewSet, basename='payroll-status')
 router.register(r'payroll-history', PayrollHistoryViewSet, basename='payroll-history')

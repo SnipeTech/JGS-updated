@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import {
   LogOut, Send, Package,
-  Clock, HardHat, Users, CalendarDays, Wallet
+  Clock, Users, CalendarDays, Wallet
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -16,7 +16,7 @@ import { StaffAttendanceTab } from './Staff/StaffAttendanceTab';
 import { MySalaryTab } from './Staff/MySalaryTab';
 
 const StaffDashboard = () => {
-  const { logout, currentUser, staffList, sites, dailyLogs } = useApp();
+  const { logout, currentUser, staffList, sites, dailyLogs, attendances } = useApp();
   const staff = staffList.find(s => s.id === currentUser?.id) || staffList.find(s => s.role === 'supervisor') || staffList[0];
   const [activeLanguage, setActiveLanguage] = useState<'en' | 'ta' | 'hi'>('en');
   const [activeSection, setActiveSection] = useState<'log' | 'material_request' | 'history' | 'week' | 'team_attendance' | 'salary'>('log');
@@ -63,9 +63,26 @@ const StaffDashboard = () => {
   const isSupervisor = staff?.role === 'supervisor' || isAdmin;
   const isDriver = staff?.role === 'driver';
 
-  const mySites = sites.filter(s =>
-    isSupervisor ? true : (s.assignedStaffIds?.includes(staff?.id || '') || s.supervisorId === staff?.id)
-  );
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const myTodayAtt = (attendances || []).find(a => a.staffId === staff?.id && a.date === todayStr);
+
+  const mySites = useMemo(() => {
+    // Only sites where this supervisor is assigned:
+    // 1. As the site supervisor (supervisorId)
+    // 2. In the site's assigned staff list
+    // 3. In today's attendance (siteId)
+    // 4. In today's team attendance crew site assignments
+    const assigned = sites.filter(s =>
+      s.supervisorId === staff?.id ||
+      s.assignedStaffIds?.includes(staff?.id || '') ||
+      myTodayAtt?.siteId === s.id ||
+      myTodayAtt?.siteAssignments?.some(sa => sa.siteId === s.id)
+    );
+    if (assigned.length > 0) return assigned;
+    // Fallback: If admin logged in without a specific supervisor, or if no sites assigned yet
+    if (isAdmin && !staff?.id) return sites;
+    return sites.filter(s => s.status === 'active');
+  }, [sites, staff?.id, isAdmin, myTodayAtt]);
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const myTodayLogs = dailyLogs.filter(l => l.staffId === currentUser?.id && l.date === today);
@@ -76,16 +93,12 @@ const StaffDashboard = () => {
       <aside className="hidden md:flex flex-col w-72 bg-[#121110] text-zinc-100 border-r border-amber-950/40 px-4 py-6 fixed h-full z-50 shadow-2xl">
         {/* Brand Header */}
         <div className="flex items-center gap-3.5 mb-8 px-2 pb-5 border-b border-zinc-800/80">
-          <div
-            className="w-11 h-11 rounded-2xl flex items-center justify-center shadow-lg shrink-0 relative overflow-hidden"
-            style={{ background: 'linear-gradient(135deg, hsl(38 78% 45%), hsl(30 88% 52%))' }}
-          >
-            <div className="absolute inset-0 bg-white/20 backdrop-blur-[1px]" />
-            <HardHat className="w-6 h-6 text-white relative z-10" />
+          <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center shadow-lg shrink-0 overflow-hidden border border-white/20">
+            <img src="/jgs-logo.png" alt="JGS Construction" className="w-full h-full object-contain scale-[1.7]" />
           </div>
           <div>
             <h1 className="text-lg font-heading font-extrabold tracking-tight text-white leading-none">
-              JGS INTERIOR
+              JGS CONSTRUCTION
             </h1>
             <p className="text-[9px] font-bold text-amber-400/90 tracking-[0.22em] uppercase mt-1">
               Field & Staff Portal
@@ -169,11 +182,8 @@ const StaffDashboard = () => {
           {/* Mobile Header */}
           <div className="flex md:hidden items-center justify-between mb-4 p-3 rounded-2xl bg-[#121110] text-zinc-100 border border-amber-950/40 shadow-lg animate-slide-up">
             <div className="flex items-center gap-3">
-              <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center shadow-md"
-                style={{ background: 'linear-gradient(135deg, hsl(38 78% 45%), hsl(30 88% 52%))' }}
-              >
-                <HardHat className="w-5 h-5 text-white" />
+              <div className="w-11 h-11 rounded-xl bg-white flex items-center justify-center shadow-md overflow-hidden shrink-0">
+                <img src="/jgs-logo.png" alt="JGS Construction" className="w-full h-full object-contain scale-[1.7]" />
               </div>
               <div>
                 <h1 className="text-base font-heading font-bold text-white leading-tight">Hi, {staff?.name || 'Staff'}</h1>

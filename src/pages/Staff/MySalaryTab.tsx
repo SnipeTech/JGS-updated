@@ -114,9 +114,12 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
       // Supervisor crew management
       let crewPay = 0;
       let crewCount = 0;
-      if (isSupervisor && att.presentCounts) {
-        crewCount = (att.presentCounts.painter || 0) + (att.presentCounts.plumber || 0) + (att.presentCounts.labour || 0);
-        const crewReg = crewCount * (staff.underLabourSalary || 0);
+      if (isSupervisor && (att.presentCounts || att.halfDayCounts)) {
+        const fullCount = Object.values(att.presentCounts || {}).reduce((sum, c) => sum + (c || 0), 0);
+        const halfCount = Object.values(att.halfDayCounts || {}).reduce((sum, c) => sum + (c || 0), 0);
+        crewCount = fullCount + halfCount;
+        const dailyRate = staff.underLabourSalary || 0;
+        const crewReg = (fullCount * dailyRate) + (halfCount * (dailyRate / 2));
         const unOtH = att.unnamedOtHours || 0;
         const unOtStaff = att.unnamedOtStaffCount !== undefined ? att.unnamedOtStaffCount : (unOtH > 0 ? crewCount : 0);
         const crewOt = unOtStaff * unOtH * (staff.underLabourOT || 0);
@@ -205,7 +208,7 @@ export const MySalaryTab = ({ staff }: MySalaryTabProps) => {
 
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 105, 20, { align: 'center' });
+    doc.text('JGS CONSTRUCTION & INTERIORS', 105, 20, { align: 'center' });
 
     doc.setFontSize(11);
     doc.setTextColor(100);

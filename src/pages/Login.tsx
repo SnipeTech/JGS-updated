@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { Eye, EyeOff, ArrowRight, Sofa } from 'lucide-react';
+import { Eye, EyeOff, ArrowRight, Sofa, ShieldCheck } from 'lucide-react';
 
 const Login = () => {
   const { login } = useApp();
@@ -25,6 +25,12 @@ const Login = () => {
       if (!success) toast.error('Invalid credentials. Please try again.');
       setLoading(false);
     }, 400);
+  };
+
+  const fillAdminCredentials = () => {
+    setId('JGS');
+    setPassword('jgsconstruction*$');
+    toast.success('Admin credentials populated (JGS)');
   };
 
   return (
@@ -53,17 +59,16 @@ const Login = () => {
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-amber-500/20 rounded-full blur-[60px] pointer-events-none" />
 
           {/* Logo & Branding */}
-          <div className="flex flex-col items-center mb-10 relative">
-            <div className="w-20 h-20 rounded-3xl flex items-center justify-center mb-5 shadow-lg"
-              style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}>
-              <Sofa className="w-10 h-10 text-white" />
+          <div className="flex flex-col items-center mb-8 relative">
+            <div className="w-24 h-24 rounded-3xl flex items-center justify-center mb-4 bg-white shadow-2xl border border-white/20 overflow-hidden">
+              <img src="/jgs-logo.png" alt="JGS Construction" className="w-full h-full object-contain scale-[1.65]" />
             </div>
-            <h1 className="text-5xl font-heading font-bold tracking-tight text-white mb-1">
-              JGS
+            <h1 className="text-3xl sm:text-4xl font-heading font-extrabold tracking-tight text-white mb-1 text-center">
+              JGS CONSTRUCTION
             </h1>
-            <p className="text-[11px] font-medium tracking-[0.3em] uppercase"
+            <p className="text-[11px] font-bold tracking-[0.22em] uppercase text-center"
               style={{ color: 'hsl(38 72% 60%)' }}>
-              Interior Management
+              Construction & Interiors Management
             </p>
           </div>
 
@@ -76,6 +81,7 @@ const Login = () => {
                 id="id"
                 value={id}
                 onChange={e => setId(e.target.value)}
+                placeholder="Enter username (e.g. JGS)"
                 className="mt-2 h-14 rounded-2xl bg-black/20 border-white/10 text-white placeholder:text-white/30 focus-visible:ring-amber-500/50 text-base px-5 transition-all focus:bg-black/40"
               />
             </div>
@@ -102,9 +108,21 @@ const Login = () => {
               </div>
             </div>
 
+            {/* Quick Admin Access Hint */}
+            <div className="pt-1 flex items-center justify-center">
+              <button
+                type="button"
+                onClick={fillAdminCredentials}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-amber-300/90 transition-all hover:border-amber-400/40 hover:scale-105 active:scale-95"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                <span>Admin Login: <span className="text-white font-semibold">JGS</span></span>
+              </button>
+            </div>
+
             <Button
               type="submit"
-              className="w-full h-14 rounded-2xl font-bold text-base gap-2 text-white shadow-lg transition-all duration-300 hover:opacity-90 hover:scale-[1.02] mt-6 border border-white/10"
+              className="w-full h-14 rounded-2xl font-bold text-base gap-2 text-white shadow-lg transition-all duration-300 hover:opacity-90 hover:scale-[1.02] mt-4 border border-white/10"
               style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
               disabled={loading}
             >

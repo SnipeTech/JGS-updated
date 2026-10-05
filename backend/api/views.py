@@ -7,7 +7,7 @@ from django.db import connection, transaction
 from .models import (
     Staff, Site, Customer, Product, Quotation, ManualExpense,
     Vendor, WorkEntry, DailyLog, Attendance, MaterialSetting,
-    MaterialRental, Supplier, Vehicle, MaterialRequest,
+    MaterialRental, Supplier, Vehicle, VehicleMaintenance, MaterialRequest,
     PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest
 )
 from .serializers import (
@@ -16,6 +16,7 @@ from .serializers import (
     VendorSerializer, WorkEntrySerializer, DailyLogSerializer,
     AttendanceSerializer, MaterialSettingSerializer,
     MaterialRentalSerializer, SupplierSerializer, VehicleSerializer,
+    VehicleMaintenanceSerializer,
     MaterialRequestSerializer, PayrollPaidStatusSerializer,
     PayrollHistorySerializer, AppConfigSerializer, StageCompletionRequestSerializer
 )
@@ -97,6 +98,7 @@ def sync_app_state(request):
         material_rentals = to_camel_dict(MaterialRentalSerializer(MaterialRental.objects.all(), many=True).data)
         suppliers = to_camel_dict(SupplierSerializer(Supplier.objects.all(), many=True).data)
         vehicles = to_camel_dict(VehicleSerializer(Vehicle.objects.all(), many=True).data)
+        vehicle_maintenance = to_camel_dict(VehicleMaintenanceSerializer(VehicleMaintenance.objects.all(), many=True).data)
         material_requests = to_camel_dict(MaterialRequestSerializer(MaterialRequest.objects.all(), many=True).data)
         stage_completion_requests = to_camel_dict(StageCompletionRequestSerializer(StageCompletionRequest.objects.all(), many=True).data)
         payroll_paid_status = to_camel_dict(PayrollPaidStatusSerializer(PayrollPaidStatus.objects.all(), many=True).data)
@@ -128,6 +130,7 @@ def sync_app_state(request):
             "materialSettings": material_settings,
             "suppliers": suppliers,
             "vehicles": vehicles,
+            "vehicleMaintenance": vehicle_maintenance,
             "materialRequests": material_requests,
             "materialRentals": material_rentals,
             "stageCompletionRequests": stage_completion_requests,
@@ -142,24 +145,67 @@ def sync_app_state(request):
         data = request.data
 
         def upsert_items(model_class, items, id_field='id'):
-            if not isinstance(items, list):
+            if not isinstance(items, list) or not items:
                 return
-            current_ids = set()
+            
+            valid_items = []
             for raw_item in items:
                 if not isinstance(raw_item, dict):
                     continue
-                # Map camelCase keys to snake_case for Django model fields
                 item = {camel_to_snake(k): v for k, v in raw_item.items()}
                 item_id = item.get(id_field)
                 if not item_id:
                     continue
-                current_ids.add(item_id)
                 fields = {k: v for k, v in item.items() if hasattr(model_class, k) and k != id_field}
-                model_class.objects.update_or_create(defaults=fields, **{id_field: item_id})
-            # Remove deleted records
-            model_class.objects.exclude(**{f"{id_field}__in": current_ids}).delete()
+                valid_items.append((item_id, fields))
+            
+            if not valid_items:
+                return
+
+            item_ids = [it[0] for it in valid_items]
+            existing_objs = {
+                str(getattr(obj, id_field)): obj 
+                for obj in model_class.objects.filter(**{f"{id_field}__in": item_ids})
+            }
+
+            to_create = []
+            for item_id, fields in valid_items:
+                obj = existing_objs.get(str(item_id))
+                if obj:
+                    changed = False
+                    for field_name, new_val in fields.items():
+                        current_val = getattr(obj, field_name)
+                        if current_val != new_val:
+                            setattr(obj, field_name, new_val)
+                            changed = True
+                    if changed:
+                        obj.save()
+                else:
+                    new_obj = model_class(**{id_field: item_id, **fields})
+                    to_create.append(new_obj)
+
+            if to_create:
+                model_class.objects.bulk_create(to_create, ignore_conflicts=True)
 
         with transaction.atomic():
+            # Handle explicit deletions if requested by frontend
+            deleted_map = data.get('deletedItems', {})
+            if isinstance(deleted_map, dict):
+                resource_model_map = {
+                    'staff': Staff, 'staffList': Staff, 'sites': Site, 'customers': Customer,
+                    'products': Product, 'quotations': Quotation, 'manualExpenses': ManualExpense,
+                    'vendors': Vendor, 'workEntries': WorkEntry, 'dailyLogs': DailyLog,
+                    'attendances': Attendance, 'materialSettings': MaterialSetting,
+                    'materialRentals': MaterialRental, 'suppliers': Supplier,
+                    'vehicles': Vehicle, 'vehicleMaintenance': VehicleMaintenance,
+                    'materialRequests': MaterialRequest,
+                    'stageCompletionRequests': StageCompletionRequest
+                }
+                for res_key, ids in deleted_map.items():
+                    m_class = resource_model_map.get(res_key)
+                    if m_class and isinstance(ids, list) and ids:
+                        m_class.objects.filter(id__in=ids).delete()
+
             if 'staffList' in data:
                 upsert_items(Staff, data['staffList'])
             if 'sites' in data:
@@ -188,6 +234,8 @@ def sync_app_state(request):
                 upsert_items(Supplier, data['suppliers'])
             if 'vehicles' in data:
                 upsert_items(Vehicle, data['vehicles'])
+            if 'vehicleMaintenance' in data:
+                upsert_items(VehicleMaintenance, data['vehicleMaintenance'])
             if 'materialRequests' in data:
                 upsert_items(MaterialRequest, data['materialRequests'])
             if 'stageCompletionRequests' in data:
@@ -299,6 +347,11 @@ class SupplierViewSet(viewsets.ModelViewSet):
 class VehicleViewSet(viewsets.ModelViewSet):
     queryset = Vehicle.objects.all().order_by('name')
     serializer_class = VehicleSerializer
+
+
+class VehicleMaintenanceViewSet(viewsets.ModelViewSet):
+    queryset = VehicleMaintenance.objects.all().order_by('-date')
+    serializer_class = VehicleMaintenanceSerializer
 
 
 class MaterialRequestViewSet(viewsets.ModelViewSet):

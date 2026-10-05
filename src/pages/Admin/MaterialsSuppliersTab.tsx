@@ -12,10 +12,11 @@ import { format } from 'date-fns';
 import {
   Package, Truck, Building2, Layers, Plus, Trash2, CheckCircle2,
   Clock, IndianRupee, MapPin, ArrowRightLeft, AlertCircle, PenLine, CreditCard,
-  Check, Filter, Calendar, Search, X, Info, RefreshCw
+  Check, Filter, Calendar, Search, X, Info, RefreshCw, Wallet
 } from 'lucide-react';
 import {
-  MaterialRequest, MaterialRequestItem, Supplier, Vehicle, VEHICLE_TYPES, SupplierPaymentRecord, MaterialRental
+  MaterialRequest, MaterialRequestItem, Supplier, Vehicle, VEHICLE_TYPES, SupplierPaymentRecord, MaterialRental,
+  MATERIAL_CATEGORIES
 } from '@/types';
 import { calculateDuration, formatTimeString, TIME_SELECT_OPTIONS } from '@/lib/utils';
 import { AssignMaterialModal, CompleteMaterialModal } from './LogisticsModals';
@@ -28,14 +29,20 @@ export const MaterialsSuppliersTab = () => {
     suppliers, addSupplier, updateSupplier, deleteSupplier,
     vehicles, addVehicle, updateVehicle, deleteVehicle,
     materialRequests, assignMaterialRequest, completeMaterialRequest, deleteMaterialRequest,
-    updateMaterialRequest, staffList, sites,
+    updateMaterialRequest, staffList, attendances, sites,
     materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental,
     unitMaster,
   } = useApp();
 
   const activeUnits = unitMaster && unitMaster.length > 0 ? unitMaster : COMMON_UNITS;
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
 
   const driversList = useMemo(() => staffList.filter(s => s.role === 'driver'), [staffList]);
+  const presentDriversList = useMemo(() => {
+    return driversList.filter(d => {
+      return (attendances || []).some(att => att.staffId === d.id && att.date === todayStr && (att.status === 'present' || att.status === 'half-day'));
+    });
+  }, [driversList, attendances, todayStr]);
 
   const [activeSubTab, setActiveSubTab] = useState<'requests' | 'assigned_deliveries' | 'rentals' | 'suppliers' | 'vehicles' | 'materials'>('requests');
   const [requestFilter, setRequestFilter] = useState<'all' | 'pending' | 'assigned' | 'completed'>('all');
@@ -68,10 +75,16 @@ export const MaterialsSuppliersTab = () => {
 
   // Material Presets Form State
   const [matName, setMatName] = useState('');
+  const [matCategory, setMatCategory] = useState<string>('Civil & Structural');
   const [matUnit, setMatUnit] = useState('');
   const [matWeight, setMatWeight] = useState('');
   const [matRate, setMatRate] = useState('');
   const [editingMatId, setEditingMatId] = useState<string | null>(null);
+  const [selectedMatCategoryFilter, setSelectedMatCategoryFilter] = useState<string>('all');
+  const [isRentalMat, setIsRentalMat] = useState(false);
+  const [matRentalRate, setMatRentalRate] = useState('');
+  const [matTypeFilter, setMatTypeFilter] = useState<'all' | 'standard' | 'rental'>('all');
+  const [rentalDeploySiteId, setRentalDeploySiteId] = useState('');
 
   // Supplier Form State
   const [showSupplierForm, setShowSupplierForm] = useState(false);
@@ -97,6 +110,7 @@ export const MaterialsSuppliersTab = () => {
   const [assignModal, setAssignModal] = useState<{ open: boolean; request: MaterialRequest | null }>({ open: false, request: null });
   const [completeModal, setCompleteModal] = useState<{ open: boolean; request: MaterialRequest | null }>({ open: false, request: null });
   const [selectedSupplierForLedger, setSelectedSupplierForLedger] = useState<Supplier | null>(null);
+  const [showVendorDueModal, setShowVendorDueModal] = useState(false);
 
   // Payment Recording Modal
   const [payModal, setPayModal] = useState<{ open: boolean; request: MaterialRequest | null }>({ open: false, request: null });
@@ -260,11 +274,27 @@ export const MaterialsSuppliersTab = () => {
     setRateEditModal({ open: false, request: null });
   };
 
+  const getReqTimestamp = (r: MaterialRequest) => {
+    if (r.createdAt) {
+      const t = new Date(r.createdAt).getTime();
+      if (!isNaN(t)) return t;
+    }
+    if (r.date) {
+      const t = new Date(r.date).getTime();
+      if (!isNaN(t)) return t;
+    }
+    if (r.id && r.id.startsWith('mr_')) {
+      const num = Number(r.id.split('_')[1]);
+      if (!isNaN(num)) return num;
+    }
+    return 0;
+  };
+
   // Filtered Lists for all tabs with Search Option
   const assignedDeliveries = useMemo(() => {
     return (materialRequests || [])
       .filter(r => r.status === 'assigned')
-      .sort((a, b) => new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime());
+      .sort((a, b) => getReqTimestamp(b) - getReqTimestamp(a));
   }, [materialRequests]);
 
   const filteredAssignedDeliveries = useMemo(() => {
@@ -296,7 +326,7 @@ export const MaterialsSuppliersTab = () => {
           r.items?.some(it => it.name.toLowerCase().includes(q) || (it.unit && it.unit.toLowerCase().includes(q)))
         );
       })
-      .sort((a, b) => new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime());
+      .sort((a, b) => getReqTimestamp(b) - getReqTimestamp(a));
   }, [materialRequests, requestFilter, searchQuery]);
 
   const filteredSuppliers = useMemo(() => {
@@ -324,25 +354,36 @@ export const MaterialsSuppliersTab = () => {
   }, [suppliers, supplierMaterialFilter, searchQuery]);
 
   const filteredVehicles = useMemo(() => {
+    const list = Array.isArray(vehicles) ? vehicles : [];
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return vehicles;
-    return vehicles.filter(v =>
-      v.name.toLowerCase().includes(q) ||
-      v.number.toLowerCase().includes(q) ||
-      v.type.toLowerCase().includes(q) ||
-      v.notes?.toLowerCase().includes(q)
+    if (!q) return list;
+    return list.filter(v =>
+      (v.name || '').toLowerCase().includes(q) ||
+      (v.number || '').toLowerCase().includes(q) ||
+      (v.type || '').toLowerCase().includes(q) ||
+      (v.notes || '').toLowerCase().includes(q)
     );
   }, [vehicles, searchQuery]);
 
   const filteredMaterialSettings = useMemo(() => {
+    let list = materialSettings || [];
+    if (matTypeFilter === 'standard') {
+      list = list.filter(m => !m.isRental);
+    } else if (matTypeFilter === 'rental') {
+      list = list.filter(m => m.isRental);
+    }
+    if (selectedMatCategoryFilter !== 'all') {
+      list = list.filter(m => (m.category || 'General').toLowerCase() === selectedMatCategoryFilter.toLowerCase());
+    }
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return materialSettings;
-    return materialSettings.filter(m =>
+    if (!q) return list;
+    return list.filter(m =>
       m.name.toLowerCase().includes(q) ||
+      (m.category && m.category.toLowerCase().includes(q)) ||
       m.unit?.toLowerCase().includes(q) ||
       m.perUnitWeight?.toLowerCase().includes(q)
     );
-  }, [materialSettings, searchQuery]);
+  }, [materialSettings, searchQuery, selectedMatCategoryFilter, matTypeFilter]);
 
   const filteredRentals = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
@@ -359,6 +400,113 @@ export const MaterialsSuppliersTab = () => {
       })
       .sort((a, b) => new Date(b.startDate + 'T00:00:00').getTime() - new Date(a.startDate + 'T00:00:00').getTime());
   }, [materialRentals, rentalStatusFilter, searchQuery]);
+
+  // Comprehensive Vendor Dues Summary across ALL tabs and orders (how much we need to give vendors)
+  const vendorPaymentSummary = useMemo(() => {
+    let totalBilled = 0;
+    let totalPaid = 0;
+    let totalToGiveVendors = 0;
+    const vendorMap = new Map<string, {
+      name: string;
+      supplierId?: string;
+      billed: number;
+      paid: number;
+      balance: number;
+      ordersCount: number;
+      unpaidOrdersCount: number;
+      phone?: string;
+      orders: MaterialRequest[];
+    }>();
+
+    (materialRequests || []).forEach(r => {
+      const itemCost = (r.items || []).reduce(
+        (sum, it) => sum + (it.supplierAmount ?? (it.supplierRate ?? it.rate ?? 0) * it.quantity),
+        0
+      );
+      const bill = r.supplierPrice ?? r.supplierMaterialCost ?? (itemCost > 0 ? itemCost : (r.materialCost || 0));
+      const paid = r.supplierPaidAmount || 0;
+      const balance = Math.max(0, bill - paid);
+
+      totalBilled += bill;
+      totalPaid += paid;
+      totalToGiveVendors += balance;
+
+      const supName = (r.supplierName || '').trim() || 'Unassigned Vendor';
+      const existing = vendorMap.get(supName) || {
+        name: supName,
+        supplierId: r.supplierId,
+        billed: 0,
+        paid: 0,
+        balance: 0,
+        ordersCount: 0,
+        unpaidOrdersCount: 0,
+        phone: (suppliers || []).find(s => s.name.toLowerCase() === supName.toLowerCase() || s.id === r.supplierId)?.phone,
+        orders: [],
+      };
+      existing.billed += bill;
+      existing.paid += paid;
+      existing.balance += balance;
+      existing.ordersCount += 1;
+      if (balance > 0) existing.unpaidOrdersCount += 1;
+      existing.orders.push(r);
+      vendorMap.set(supName, existing);
+    });
+
+    // Also register any suppliers without orders
+    (suppliers || []).forEach(sup => {
+      if (!vendorMap.has(sup.name.trim())) {
+        vendorMap.set(sup.name.trim(), {
+          name: sup.name.trim(),
+          supplierId: sup.id,
+          billed: 0,
+          paid: 0,
+          balance: 0,
+          ordersCount: 0,
+          unpaidOrdersCount: 0,
+          phone: sup.phone,
+          orders: [],
+        });
+      }
+    });
+
+    const vendorsList = Array.from(vendorMap.values()).sort((a, b) => b.balance - a.balance);
+
+    const pendingReqsDue = (materialRequests || [])
+      .filter(r => r.status === 'pending')
+      .reduce((sum, r) => {
+        const cost = (r.items || []).reduce((s, it) => s + (it.supplierAmount ?? (it.supplierRate ?? it.rate ?? 0) * it.quantity), 0);
+        const bill = r.supplierPrice ?? cost;
+        return sum + Math.max(0, bill - (r.supplierPaidAmount || 0));
+      }, 0);
+
+    const inTransitDue = (materialRequests || [])
+      .filter(r => r.status === 'assigned')
+      .reduce((sum, r) => {
+        const cost = (r.items || []).reduce((s, it) => s + (it.supplierAmount ?? (it.supplierRate ?? it.rate ?? 0) * it.quantity), 0);
+        const bill = r.supplierPrice ?? cost;
+        return sum + Math.max(0, bill - (r.supplierPaidAmount || 0));
+      }, 0);
+
+    const completedDue = (materialRequests || [])
+      .filter(r => r.status === 'completed')
+      .reduce((sum, r) => {
+        const cost = (r.items || []).reduce((s, it) => s + (it.supplierAmount ?? (it.supplierRate ?? it.rate ?? 0) * it.quantity), 0);
+        const bill = r.supplierPrice ?? cost;
+        return sum + Math.max(0, bill - (r.supplierPaidAmount || 0));
+      }, 0);
+
+    return {
+      totalBilled,
+      totalPaid,
+      totalToGiveVendors,
+      vendorsList,
+      vendorsWithDue: vendorsList.filter(v => v.balance > 0),
+      vendorsWithDueCount: vendorsList.filter(v => v.balance > 0).length,
+      pendingReqsDue,
+      inTransitDue,
+      completedDue,
+    };
+  }, [materialRequests, suppliers]);
 
   const handleSelectRentalMaterial = (id: string) => {
     setRentalMatId(id);
@@ -448,22 +596,70 @@ export const MaterialsSuppliersTab = () => {
     if (editingMatId) {
       updateMaterialSetting(editingMatId, {
         name: matName.trim(),
+        category: matCategory.trim() || 'General',
         unit: matUnit.trim() || 'Unit',
         perUnitWeight: matWeight.trim() || undefined,
-        defaultRate: Number(matRate) || 0
+        defaultRate: 0,
+        isRental: isRentalMat,
+        rentalRatePerDay: isRentalMat ? (Number(matRentalRate) || 0) : undefined,
       });
-      toast.success('Material preset updated!');
+
+      if (isRentalMat && rentalDeploySiteId && rentalDeploySiteId !== 'none') {
+        const targetSite = sites.find(s => s.id === rentalDeploySiteId);
+        if (targetSite) {
+          addMaterialRental({
+            materialId: editingMatId,
+            materialName: matName.trim(),
+            siteId: targetSite.id,
+            siteName: targetSite.name,
+            startDate: format(new Date(), 'yyyy-MM-dd'),
+            quantity: 1,
+            unit: matUnit.trim() || 'Nos',
+            rentalRatePerDay: Number(matRentalRate) || 0,
+            status: 'active',
+            notes: 'Deployed via Material Catalog'
+          });
+          toast.success(`Rental material updated & deployed to ${targetSite.name}!`);
+        }
+      } else {
+        toast.success(isRentalMat ? 'Rental material preset updated!' : 'Material preset updated!');
+      }
       setEditingMatId(null);
     } else {
+      const newMatId = `mat_${Date.now()}`;
       addMaterialSetting({
         name: matName.trim(),
+        category: matCategory.trim() || 'General',
         unit: matUnit.trim() || 'Unit',
         perUnitWeight: matWeight.trim() || undefined,
-        defaultRate: Number(matRate) || 0
+        defaultRate: 0,
+        isRental: isRentalMat,
+        rentalRatePerDay: isRentalMat ? (Number(matRentalRate) || 0) : undefined,
       });
-      toast.success('Material preset added!');
+
+      if (isRentalMat && rentalDeploySiteId && rentalDeploySiteId !== 'none') {
+        const targetSite = sites.find(s => s.id === rentalDeploySiteId);
+        if (targetSite) {
+          addMaterialRental({
+            materialId: newMatId,
+            materialName: matName.trim(),
+            siteId: targetSite.id,
+            siteName: targetSite.name,
+            startDate: format(new Date(), 'yyyy-MM-dd'),
+            quantity: 1,
+            unit: matUnit.trim() || 'Nos',
+            rentalRatePerDay: Number(matRentalRate) || 0,
+            status: 'active',
+            notes: 'Deployed via Material Catalog'
+          });
+          toast.success(`Rental material added to catalog & deployed to ${targetSite.name}!`);
+        }
+      } else {
+        toast.success(isRentalMat ? 'Rental material added to catalog!' : 'Material preset added!');
+      }
     }
-    setMatName(''); setMatUnit(''); setMatWeight(''); setMatRate('');
+    setMatName(''); setMatCategory('Civil & Structural'); setMatUnit(''); setMatWeight(''); setMatRate('');
+    setIsRentalMat(false); setMatRentalRate(''); setRentalDeploySiteId('');
   };
 
   const toggleCatalogMaterial = (matName: string) => {
@@ -538,67 +734,200 @@ export const MaterialsSuppliersTab = () => {
   return (
     <div className="space-y-4 animate-slide-up">
       {/* ── EXECUTIVE STATS SUMMARY ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="p-3.5 rounded-2xl bg-card border border-border/70 shadow-2xs space-y-1 hover:border-amber-500/40 transition-all">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+        {/* Card 1: Outstanding Vendor Dues (To Give Vendors) */}
+        <div
+          onClick={() => setShowVendorDueModal(true)}
+          className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/40 hover:border-amber-500 shadow-2xs space-y-1 transition-all cursor-pointer group"
+        >
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">To Give Vendors</span>
+            <span className="p-1.5 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 group-hover:scale-110 transition-transform"><Wallet className="w-3.5 h-3.5" /></span>
+          </div>
+          <div className="text-xl font-heading font-black text-amber-700 dark:text-amber-400">
+            ₹{vendorPaymentSummary.totalToGiveVendors.toLocaleString()}
+          </div>
+          <div className="text-[10px] text-muted-foreground flex items-center justify-between">
+            <span>{vendorPaymentSummary.vendorsWithDueCount} vendor{vendorPaymentSummary.vendorsWithDueCount !== 1 ? 's' : ''} unpaid</span>
+            <span className="text-amber-600 font-bold underline">Details</span>
+          </div>
+        </div>
+
+        <div
+          onClick={() => { setActiveSubTab('requests'); setRequestFilter('pending'); }}
+          className={`p-3.5 rounded-2xl bg-card border shadow-2xs space-y-1 transition-all cursor-pointer ${
+            activeSubTab === 'requests' && requestFilter === 'pending' ? 'border-amber-500 ring-1 ring-amber-500' : 'border-border/70 hover:border-amber-500/40'
+          }`}
+        >
           <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-[11px] font-bold uppercase tracking-wider">Pending Requests</span>
             <span className="p-1.5 rounded-xl bg-amber-500/10 text-amber-600"><Package className="w-3.5 h-3.5" /></span>
           </div>
-          <div className="text-2xl font-heading font-black text-foreground">
-            {materialRequests.filter(r => r.status === 'pending').length}
+          <div className="text-xl font-heading font-black text-foreground">
+            {(materialRequests || []).filter(r => r.status === 'pending').length}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Due: ₹{vendorPaymentSummary.pendingReqsDue.toLocaleString()}
           </div>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-card border border-border/70 shadow-2xs space-y-1 hover:border-blue-500/40 transition-all">
+        <div
+          onClick={() => setActiveSubTab('assigned_deliveries')}
+          className={`p-3.5 rounded-2xl bg-card border shadow-2xs space-y-1 transition-all cursor-pointer ${
+            activeSubTab === 'assigned_deliveries' ? 'border-blue-500 ring-1 ring-blue-500' : 'border-border/70 hover:border-blue-500/40'
+          }`}
+        >
           <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Active In-Transit</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider">In-Transit</span>
             <span className="p-1.5 rounded-xl bg-blue-500/10 text-blue-600"><Truck className="w-3.5 h-3.5" /></span>
           </div>
-          <div className="text-2xl font-heading font-black text-blue-600 dark:text-blue-400">
+          <div className="text-xl font-heading font-black text-blue-600 dark:text-blue-400">
             {assignedDeliveries.length}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Due: ₹{vendorPaymentSummary.inTransitDue.toLocaleString()}
           </div>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-card border border-border/70 shadow-2xs space-y-1 hover:border-emerald-500/40 transition-all">
+        <div
+          onClick={() => setActiveSubTab('suppliers')}
+          className={`p-3.5 rounded-2xl bg-card border shadow-2xs space-y-1 transition-all cursor-pointer ${
+            activeSubTab === 'suppliers' ? 'border-emerald-500 ring-1 ring-emerald-500' : 'border-border/70 hover:border-emerald-500/40'
+          }`}
+        >
           <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-[11px] font-bold uppercase tracking-wider">Suppliers</span>
             <span className="p-1.5 rounded-xl bg-emerald-500/10 text-emerald-600"><Building2 className="w-3.5 h-3.5" /></span>
           </div>
-          <div className="text-2xl font-heading font-black text-foreground">
-            {suppliers.length}
+          <div className="text-xl font-heading font-black text-foreground">
+            {(suppliers || []).length}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Ledger & Dues
           </div>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-card border border-border/70 shadow-2xs space-y-1 hover:border-primary/40 transition-all">
+        <div
+          onClick={() => setActiveSubTab('vehicles')}
+          className={`p-3.5 rounded-2xl bg-card border shadow-2xs space-y-1 transition-all cursor-pointer ${
+            activeSubTab === 'vehicles' ? 'border-primary ring-1 ring-primary' : 'border-border/70 hover:border-primary/40'
+          }`}
+        >
           <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-[11px] font-bold uppercase tracking-wider">Fleet Vehicles</span>
             <span className="p-1.5 rounded-xl bg-primary/10 text-primary"><Truck className="w-3.5 h-3.5" /></span>
           </div>
-          <div className="text-2xl font-heading font-black text-foreground">
-            {vehicles.length}
+          <div className="text-xl font-heading font-black text-foreground">
+            {(vehicles || []).length}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Transport fleet
           </div>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-card border border-border/70 shadow-2xs space-y-1 hover:border-amber-500/40 transition-all">
+        <div
+          onClick={() => setActiveSubTab('rentals')}
+          className={`p-3.5 rounded-2xl bg-card border shadow-2xs space-y-1 transition-all cursor-pointer ${
+            activeSubTab === 'rentals' ? 'border-amber-500 ring-1 ring-amber-500' : 'border-border/70 hover:border-amber-500/40'
+          }`}
+        >
           <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-[11px] font-bold uppercase tracking-wider">Site Rentals</span>
             <span className="p-1.5 rounded-xl bg-amber-500/10 text-amber-600"><RefreshCw className="w-3.5 h-3.5" /></span>
           </div>
-          <div className="text-2xl font-heading font-black text-amber-600 dark:text-amber-400">
+          <div className="text-xl font-heading font-black text-amber-600 dark:text-amber-400">
             {(materialRentals || []).filter(r => r.status === 'active').length}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Running deployed
+          </div>
+        </div>
+
+        <div
+          onClick={() => setActiveSubTab('materials')}
+          className={`p-3.5 rounded-2xl bg-card border shadow-2xs space-y-1 transition-all cursor-pointer ${
+            activeSubTab === 'materials' ? 'border-indigo-500 ring-1 ring-indigo-500' : 'border-border/70 hover:border-indigo-500/40'
+          }`}
+        >
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Catalog</span>
+            <span className="p-1.5 rounded-xl bg-indigo-500/10 text-indigo-600"><Layers className="w-3.5 h-3.5" /></span>
+          </div>
+          <div className="text-xl font-heading font-black text-indigo-600 dark:text-indigo-400">
+            {materialSettings.length}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Standard presets
           </div>
         </div>
       </div>
 
-      {/* Sub-Tabs Selector */}
+      {/* ── GLOBAL VENDOR PAYMENT BANNER (VISIBLE ACROSS ALL TABS) ── */}
+      <div className="p-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-card border border-amber-500/30 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0">
+            <Wallet className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs uppercase font-bold text-muted-foreground tracking-wider">Vendor Dues Status:</span>
+              <span className="text-sm font-bold text-foreground">
+                We need to give vendors <strong className="text-amber-600 dark:text-amber-400 font-extrabold font-mono text-base">₹{vendorPaymentSummary.totalToGiveVendors.toLocaleString()}</strong>
+              </span>
+              {vendorPaymentSummary.totalToGiveVendors > 0 ? (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                  {vendorPaymentSummary.vendorsWithDueCount} Vendor{vendorPaymentSummary.vendorsWithDueCount !== 1 ? 's' : ''} Pending
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                  All Vendors Settled ✓
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
+              <span>Total Material Bills: <strong className="text-foreground">₹{vendorPaymentSummary.totalBilled.toLocaleString()}</strong></span>
+              <span>•</span>
+              <span>Amount Given: <strong className="text-emerald-600 font-bold">₹{vendorPaymentSummary.totalPaid.toLocaleString()}</strong></span>
+              <span>•</span>
+              <span>Requisitions Due: <strong className="text-amber-600 font-bold">₹{vendorPaymentSummary.pendingReqsDue.toLocaleString()}</strong></span>
+              <span>•</span>
+              <span>In-Transit Due: <strong className="text-blue-600 dark:text-blue-400 font-bold">₹{vendorPaymentSummary.inTransitDue.toLocaleString()}</strong></span>
+              <span>•</span>
+              <span>Completed Orders Due: <strong className="text-amber-600 dark:text-amber-400 font-bold">₹{vendorPaymentSummary.completedDue.toLocaleString()}</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            size="sm"
+            onClick={() => setShowVendorDueModal(true)}
+            className="h-8 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white gap-1.5 shadow-xs"
+          >
+            <CreditCard className="w-3.5 h-3.5" /> View Vendor Dues ({vendorPaymentSummary.vendorsWithDueCount})
+          </Button>
+          {activeSubTab !== 'suppliers' && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setActiveSubTab('suppliers')}
+              className="h-8 rounded-xl text-xs font-semibold border-border/70 hover:bg-muted"
+            >
+              <Building2 className="w-3.5 h-3.5 mr-1 text-primary" /> Suppliers Ledger
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Sub-Tabs Selector with Vendor Due Badges on All Tabs */}
       <div className="flex gap-2 p-1.5 bg-muted/60 rounded-2xl border border-border/50 overflow-x-auto hide-scrollbar">
         {[
-          { id: 'requests' as const, label: `Requisitions (${materialRequests.filter(r => r.status === 'pending').length} Pending)`, icon: <Package className="w-4 h-4" /> },
-          { id: 'assigned_deliveries' as const, label: `Active Driver Deliveries (${assignedDeliveries.length})`, icon: <Truck className="w-4 h-4 text-blue-500" /> },
+          { id: 'requests' as const, label: `Requisitions (${materialRequests.filter(r => r.status === 'pending').length} Pending · ₹${vendorPaymentSummary.pendingReqsDue.toLocaleString()} Due)`, icon: <Package className="w-4 h-4" /> },
+          { id: 'assigned_deliveries' as const, label: `Active Deliveries (${assignedDeliveries.length} · ₹${vendorPaymentSummary.inTransitDue.toLocaleString()} Due)`, icon: <Truck className="w-4 h-4 text-blue-500" /> },
           { id: 'rentals' as const, label: `Rental Materials (${(materialRentals || []).filter(r => r.status === 'active').length} Active)`, icon: <RefreshCw className="w-4 h-4 text-amber-500" /> },
-          { id: 'suppliers' as const, label: `Suppliers & Ledger (${suppliers.length})`, icon: <Building2 className="w-4 h-4" /> },
+          { id: 'suppliers' as const, label: `Suppliers & Ledger (${suppliers.length} · ₹${vendorPaymentSummary.totalToGiveVendors.toLocaleString()} Due)`, icon: <Building2 className="w-4 h-4 text-emerald-600" /> },
           { id: 'vehicles' as const, label: `Fleet Vehicles (${vehicles.length})`, icon: <Truck className="w-4 h-4" /> },
-          { id: 'materials' as const, label: 'Materials Catalog', icon: <Layers className="w-4 h-4" /> },
+          { id: 'materials' as const, label: `Materials Catalog (${materialSettings.length})`, icon: <Layers className="w-4 h-4 text-indigo-500" /> },
         ].map(tab => (
           <button
             key={tab.id}
@@ -660,6 +989,22 @@ export const MaterialsSuppliersTab = () => {
             <span className="text-xs font-bold px-3 py-1 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
               {filteredAssignedDeliveries.length} In Transit
             </span>
+          </div>
+
+          {/* In-Transit Deliveries Vendor Due Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-2 p-3 px-4 bg-blue-500/10 rounded-2xl border border-blue-500/20 text-xs">
+            <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
+              <Truck className="w-4 h-4 text-blue-500" />
+              In-Transit Deliveries Vendor Balance Due:
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-foreground font-mono text-sm">
+                ₹{vendorPaymentSummary.inTransitDue.toLocaleString()}
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                (Global Total to Give Vendors: <strong className="text-amber-600 dark:text-amber-400">₹{vendorPaymentSummary.totalToGiveVendors.toLocaleString()}</strong>)
+              </span>
+            </div>
           </div>
 
           {filteredAssignedDeliveries.length === 0 ? (
@@ -777,9 +1122,22 @@ export const MaterialsSuppliersTab = () => {
                                   {it.quantity} {it.unit}
                                 </span>
                               </div>
-                              <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-500/20">
-                                ₹{sRate}/{it.unit || 'unit'} = ₹{sTotal.toLocaleString()}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-500/20">
+                                  ₹{sRate}/{it.unit || 'unit'} = ₹{sTotal.toLocaleString()}
+                                </span>
+                                {(it.gstAmount || 0) > 0 && (
+                                  it.gstType === 'cgst_sgst' ? (
+                                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-700 dark:text-blue-400 font-bold border border-blue-500/20">
+                                      CGST {it.cgstRate}% (₹{it.cgstAmount}) + SGST {it.sgstRate}% (₹{it.sgstAmount})
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-primary/10 text-primary font-bold border border-primary/20">
+                                      +{it.gstRate}% GST (₹{it.gstAmount?.toLocaleString()})
+                                    </span>
+                                  )
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -812,20 +1170,30 @@ export const MaterialsSuppliersTab = () => {
                         )}
                       </div>
 
-                      {balance > 0 ? (
+                      <div className="flex items-center gap-2">
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => openPayModal(req)}
-                          className="h-8 text-xs font-semibold gap-1 rounded-xl self-end sm:self-auto"
+                          onClick={() => setCompleteModal({ open: true, request: req })}
+                          className="h-8 text-xs font-semibold gap-1.5 rounded-xl border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 shadow-xs"
                         >
-                          <CreditCard className="w-3.5 h-3.5 text-primary" /> Record Supplier Payment
+                          <PenLine className="w-3.5 h-3.5" /> Edit Rates & GST
                         </Button>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 font-bold text-[11px] flex items-center gap-1 border border-emerald-500/25">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Payment Completed
-                        </span>
-                      )}
+                        {balance > 0 ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openPayModal(req)}
+                            className="h-8 text-xs font-semibold gap-1 rounded-xl self-end sm:self-auto"
+                          >
+                            <CreditCard className="w-3.5 h-3.5 text-primary" /> Record Supplier Payment
+                          </Button>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 font-bold text-[11px] flex items-center gap-1 border border-emerald-500/25">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Payment Completed
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </Card>
                 );
@@ -854,6 +1222,22 @@ export const MaterialsSuppliersTab = () => {
                   {f}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Requisitions Vendor Due Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-2 p-3 px-4 bg-amber-500/10 rounded-2xl border border-amber-500/20 text-xs">
+            <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
+              <Package className="w-4 h-4 text-amber-500" />
+              Pending Requisitions Vendor Balance:
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-foreground font-mono text-sm">
+                ₹{vendorPaymentSummary.pendingReqsDue.toLocaleString()}
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                (Global Total to Give Vendors: <strong className="text-amber-600 dark:text-amber-400">₹{vendorPaymentSummary.totalToGiveVendors.toLocaleString()}</strong>)
+              </span>
             </div>
           </div>
 
@@ -939,6 +1323,16 @@ export const MaterialsSuppliersTab = () => {
                           </Button>
                         </div>
                       )}
+                      {isCompleted && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setCompleteModal({ open: true, request: req })}
+                          className="h-8 text-xs font-semibold gap-1.5 rounded-xl border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 shadow-xs"
+                        >
+                          <PenLine className="w-3.5 h-3.5" /> Edit Rates & GST
+                        </Button>
+                      )}
                     </div>
                   </div>
 
@@ -948,14 +1342,24 @@ export const MaterialsSuppliersTab = () => {
                       const cRate = it.clientRate !== undefined ? it.clientRate : it.rate;
                       const custRate = it.customerRate !== undefined ? it.customerRate : it.rate;
                       return (
-                        <span key={idx} className="bg-muted/60 px-2.5 py-1 rounded-xl text-xs font-semibold border border-border/50">
-                          {it.name}: <strong className="text-primary">{it.quantity} {it.unit}</strong>
+                        <span key={idx} className="bg-muted/60 px-2.5 py-1 rounded-xl text-xs font-semibold border border-border/50 flex items-center gap-1.5 flex-wrap">
+                          <span>{it.name}: <strong className="text-primary">{it.quantity} {it.unit}</strong></span>
                           {(cRate || custRate) ? (
-                            <span className="ml-1 text-[11px] font-normal text-muted-foreground">
-                              {cRate ? `(Client: ₹${cRate})` : ''}
-                              {custRate ? ` (Customer: ₹${custRate})` : ''}
+                            <span className="text-[11px] font-normal text-muted-foreground">
+                              {cRate ? `(₹${cRate}/${it.unit})` : ''}
                             </span>
                           ) : null}
+                          {(it.gstAmount || 0) > 0 && (
+                            it.gstType === 'cgst_sgst' ? (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-500/20">
+                                CGST {it.cgstRate}% (₹{it.cgstAmount}) + SGST {it.sgstRate}% (₹{it.sgstAmount})
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-primary/10 text-primary border border-primary/20">
+                                +{it.gstRate}% GST (₹{it.gstAmount})
+                              </span>
+                            )
+                          )}
                         </span>
                       );
                     })}
@@ -984,20 +1388,20 @@ export const MaterialsSuppliersTab = () => {
                                   <span className="font-mono font-semibold text-foreground">₹{((supplierPrice || 0) - (req.gstAmount || 0)).toLocaleString()}</span>
                                 </div>
                                 {(req.gstAmount || 0) > 0 && (
-                                  req.gstType === 'inter-state' ? (
+                                  req.gstType === 'inter-state' || req.gstType === 'igst' ? (
                                     <div className="flex justify-between items-center text-muted-foreground">
                                       <span>IGST ({req.igstRate || 0}%):</span>
-                                      <span className="font-mono font-semibold text-foreground">₹{req.gstAmount?.toLocaleString()}</span>
+                                      <span className="font-mono font-semibold text-foreground">₹{(req.igstAmount ?? req.gstAmount)?.toLocaleString()}</span>
                                     </div>
                                   ) : (
                                     <>
                                       <div className="flex justify-between items-center text-muted-foreground">
-                                        <span>CGST ({req.cgstRate || ((req.igstRate || 0) / 2)}%):</span>
-                                        <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                        <span>CGST ({req.cgstRate || ((req.gstRate || 0) / 2)}%):</span>
+                                        <span className="font-mono font-semibold text-foreground">₹{(req.cgstAmount ?? ((req.gstAmount || 0) / 2)).toLocaleString()}</span>
                                       </div>
                                       <div className="flex justify-between items-center text-muted-foreground">
-                                        <span>SGST ({req.sgstRate || ((req.igstRate || 0) / 2)}%):</span>
-                                        <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                        <span>SGST ({req.sgstRate || ((req.gstRate || 0) / 2)}%):</span>
+                                        <span className="font-mono font-semibold text-foreground">₹{(req.sgstAmount ?? ((req.gstAmount || 0) / 2)).toLocaleString()}</span>
                                       </div>
                                     </>
                                   )
@@ -1268,6 +1672,25 @@ export const MaterialsSuppliersTab = () => {
             </div>
           </div>
 
+          {/* Supplier Dues Summary Metric Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-2xl bg-card border border-border/70 shadow-xs">
+            <div className="space-y-0.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Total Vendor Purchases Billed</span>
+              <div className="text-xl font-heading font-black text-foreground">₹{vendorPaymentSummary.totalBilled.toLocaleString()}</div>
+              <p className="text-[10px] text-muted-foreground">From all supplier requisitions</p>
+            </div>
+            <div className="space-y-0.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600">Total Given / Paid to Vendors</span>
+              <div className="text-xl font-heading font-black text-emerald-600">₹{vendorPaymentSummary.totalPaid.toLocaleString()}</div>
+              <p className="text-[10px] text-muted-foreground">Settled payments to date</p>
+            </div>
+            <div className="space-y-0.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Total We Need to Give Vendors</span>
+              <div className="text-xl font-heading font-black text-amber-600 dark:text-amber-400">₹{vendorPaymentSummary.totalToGiveVendors.toLocaleString()}</div>
+              <p className="text-[10px] text-muted-foreground">{vendorPaymentSummary.vendorsWithDueCount} vendor(s) currently have pending balance</p>
+            </div>
+          </div>
+
           {/* Quick Filter by Material from Catalog */}
           <div className="flex flex-wrap items-center gap-2 p-2.5 bg-card rounded-xl border border-border/50 text-xs">
             <span className="text-muted-foreground font-semibold flex items-center gap-1">
@@ -1371,7 +1794,7 @@ export const MaterialsSuppliersTab = () => {
                         Click materials from your catalog to assign to this supplier:
                       </span>
                       <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1">
-                        {materialSettings.map(mat => {
+                        {materialSettings.filter(mat => !mat.isRental).map(mat => {
                           const isSelected = selectedCatalogMaterials.includes(mat.name);
                           return (
                             <button
@@ -1620,7 +2043,10 @@ export const MaterialsSuppliersTab = () => {
       {activeSubTab === 'vehicles' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="section-header !mb-0">Fleet Vehicles</h3>
+            <div>
+              <h3 className="section-header !mb-0">Fleet Vehicles</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Manage company trucks, pickups, and transit vehicles for material dispatches</p>
+            </div>
             <Button
               size="sm"
               onClick={() => {
@@ -1628,15 +2054,35 @@ export const MaterialsSuppliersTab = () => {
                 setEditingVehId(null);
                 setVehName(''); setVehNumber(''); setVehType('Pickup'); setVehNotes('');
               }}
-              className="h-8 rounded-xl gap-1.5 text-xs font-semibold text-white shadow-sm"
+              className="h-9 rounded-xl gap-1.5 text-xs font-semibold text-white shadow-sm"
               style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
             >
-              <Plus className="w-3.5 h-3.5" /> Add Vehicle
+              <Plus className="w-3.5 h-3.5" /> {showVehicleForm && !editingVehId ? 'Close Form' : 'Add Vehicle'}
             </Button>
           </div>
 
           {showVehicleForm && (
-            <div className="form-card">
+            <div className="form-card animate-in fade-in-50 duration-200">
+              <div className="flex items-center justify-between mb-3 pb-2 border-b border-border/50">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-foreground flex items-center gap-2">
+                  <Truck className="w-4 h-4 text-primary" />
+                  {editingVehId ? 'Edit Vehicle Details' : 'Register New Fleet Vehicle'}
+                </h4>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => {
+                    setShowVehicleForm(false);
+                    setEditingVehId(null);
+                    setVehName(''); setVehNumber(''); setVehNotes('');
+                  }}
+                  className="h-6 w-6 p-0 rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
               <form onSubmit={handleVehicleSubmit} className="space-y-3">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
@@ -1646,6 +2092,7 @@ export const MaterialsSuppliersTab = () => {
                       value={vehName}
                       onChange={e => setVehName(e.target.value)}
                       className="mt-1 h-10 rounded-xl text-xs font-semibold"
+                      required
                     />
                   </div>
                   <div>
@@ -1655,6 +2102,7 @@ export const MaterialsSuppliersTab = () => {
                       value={vehNumber}
                       onChange={e => setVehNumber(e.target.value)}
                       className="mt-1 h-10 rounded-xl text-xs font-mono font-bold"
+                      required
                     />
                   </div>
                   <div>
@@ -1672,28 +2120,66 @@ export const MaterialsSuppliersTab = () => {
                   </div>
                 </div>
 
-                <Button
-                  type="submit"
-                  className="w-full h-10 rounded-xl text-white font-bold text-xs shadow-sm"
-                  style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
-                >
-                  {editingVehId ? 'Update Vehicle' : 'Register Vehicle'}
-                </Button>
+                <div>
+                  <Label className="text-xs font-semibold text-muted-foreground">Notes / Capacity (Optional)</Label>
+                  <Input
+                    placeholder="e.g. 1.5 Ton payload capacity, assigned to Salem site"
+                    value={vehNotes}
+                    onChange={e => setVehNotes(e.target.value)}
+                    className="mt-1 h-10 rounded-xl text-xs"
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setShowVehicleForm(false);
+                      setEditingVehId(null);
+                      setVehName(''); setVehNumber(''); setVehNotes('');
+                    }}
+                    className="flex-1 h-10 rounded-xl text-xs font-semibold"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="flex-1 h-10 rounded-xl text-white font-bold text-xs shadow-sm"
+                    style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
+                  >
+                    {editingVehId ? 'Update Vehicle' : 'Register Vehicle to Fleet'}
+                  </Button>
+                </div>
               </form>
             </div>
           )}
 
           {filteredVehicles.length === 0 ? (
             <div className="text-center py-12 bg-muted/20 rounded-2xl border border-dashed border-border/60">
-              <Truck className="w-9 h-9 mx-auto text-muted-foreground/40 mb-2" />
-              <p className="text-xs font-semibold text-muted-foreground">
-                {searchQuery ? `No vehicles matching "${searchQuery}"` : 'No vehicles registered yet'}
+              <Truck className="w-10 h-10 mx-auto text-muted-foreground/40 mb-2" />
+              <p className="text-xs font-semibold text-muted-foreground mb-3">
+                {searchQuery ? `No vehicles matching "${searchQuery}"` : 'No vehicles registered in fleet yet'}
               </p>
+              {!showVehicleForm && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setShowVehicleForm(true);
+                    setEditingVehId(null);
+                    setVehName(''); setVehNumber(''); setVehType('Pickup'); setVehNotes('');
+                  }}
+                  className="rounded-xl text-xs font-semibold gap-1.5 text-white shadow-sm"
+                  style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add First Fleet Vehicle
+                </Button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
               {filteredVehicles.map(veh => (
-                <Card key={veh.id} className="p-4 rounded-2xl bg-card border border-border/60 shadow-xs space-y-2">
+                <Card key={veh.id} className="p-4 rounded-2xl bg-card border border-border/60 shadow-xs space-y-2 hover:border-amber-500/40 transition-all">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5">
                       <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
@@ -1704,21 +2190,46 @@ export const MaterialsSuppliersTab = () => {
                         <span className="text-xs font-mono font-bold text-primary">{veh.number}</span>
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => {
-                        deleteVehicle(veh.id);
-                        toast.success('Vehicle removed');
-                      }}
-                      className="h-7 w-7 rounded-lg text-destructive"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          setEditingVehId(veh.id);
+                          setVehName(veh.name);
+                          setVehNumber(veh.number);
+                          setVehType(veh.type || 'Pickup');
+                          setVehNotes(veh.notes || '');
+                          setShowVehicleForm(true);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground"
+                      >
+                        <PenLine className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          deleteVehicle(veh.id);
+                          toast.success('Vehicle removed from fleet');
+                        }}
+                        className="h-7 w-7 rounded-lg text-destructive hover:bg-destructive/10"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
-                  <div className="pt-1 text-xs text-muted-foreground flex justify-between">
-                    <span>Type: <strong className="text-foreground">{veh.type}</strong></span>
-                    <span className="text-emerald-600 font-semibold">Ready for Dispatch</span>
+                  {veh.notes && (
+                    <p className="text-[11px] text-muted-foreground bg-muted/30 px-2 py-1 rounded-lg">
+                      {veh.notes}
+                    </p>
+                  )}
+                  <div className="pt-1 text-xs text-muted-foreground flex justify-between items-center border-t border-border/40">
+                    <span>Type: <strong className="text-foreground">{veh.type || 'Other'}</strong></span>
+                    <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Ready for Dispatch
+                    </span>
                   </div>
                 </Card>
               ))}
@@ -1730,11 +2241,22 @@ export const MaterialsSuppliersTab = () => {
       {/* ── 5. MATERIALS PRESETS CATALOG ── */}
       {activeSubTab === 'materials' && (
         <div className="space-y-4">
-          <h3 className="section-header !mb-0">Materials Presets Catalog</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="section-header !mb-0">Materials Presets Catalog</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Manage construction materials, standard units, categories, and benchmark purchase rates.
+              </p>
+            </div>
+            <span className="text-xs font-bold text-primary bg-primary/10 px-3 py-1 rounded-full w-fit">
+              Total {materialSettings.length} Presets Available
+            </span>
+          </div>
+
           <div className="form-card">
             <form onSubmit={handleMaterialSubmit} className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                <div className="sm:col-span-2">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                <div className="sm:col-span-5">
                   <Label className="text-xs font-semibold text-muted-foreground">Material Name *</Label>
                   <Input
                     placeholder="e.g. Cement Bag, M-Sand, Red Brick"
@@ -1743,65 +2265,240 @@ export const MaterialsSuppliersTab = () => {
                     className="mt-1 h-10 rounded-xl text-xs font-semibold"
                   />
                 </div>
-                <div>
+                <div className="sm:col-span-4">
+                  <Label className="text-xs font-semibold text-muted-foreground">Category *</Label>
+                  <Select value={matCategory} onValueChange={setMatCategory}>
+                    <SelectTrigger className="mt-1 h-10 rounded-xl text-xs font-semibold">
+                      <SelectValue placeholder="Select Category" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-60">
+                      {MATERIAL_CATEGORIES.map(cat => (
+                        <SelectItem key={cat} value={cat} className="text-xs font-medium">
+                          {cat}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="sm:col-span-3">
                   <Label className="text-xs font-semibold text-muted-foreground">Unit</Label>
                   <Input
-                    placeholder="e.g. Bags, Tons, Nos, Liters"
+                    placeholder="e.g. Bags, Tons, Nos, Sets"
                     value={matUnit}
                     onChange={e => setMatUnit(e.target.value)}
                     className="mt-1 h-10 rounded-xl text-xs font-semibold"
                   />
                 </div>
-                <div>
-                  <Label className="text-xs font-semibold text-muted-foreground">Default Rate (₹)</Label>
-                  <Input
-                    type="number"
-                    placeholder="e.g. 420"
-                    value={matRate}
-                    onChange={e => setMatRate(e.target.value)}
-                    className="mt-1 h-10 rounded-xl text-xs font-semibold"
-                  />
-                </div>
               </div>
 
-              <Button
-                type="submit"
-                className="w-full h-10 rounded-xl text-white font-bold text-xs shadow-sm mt-1"
-                style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
-              >
-                {editingMatId ? 'Update Material Preset' : 'Add Material Preset'}
-              </Button>
+              {/* Rental Designation & Rate */}
+              <div className="flex flex-wrap items-center gap-3 pt-2.5 border-t border-border/30">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={isRentalMat}
+                    onChange={e => setIsRentalMat(e.target.checked)}
+                    className="rounded border-border w-4 h-4 text-primary"
+                  />
+                  <span>Designate as Rental Material (e.g. Scaffolding, Mixer Machine, Shuttering Plates, Generator)</span>
+                </label>
+
+                {isRentalMat && (
+                  <div className="flex flex-wrap items-center gap-3 pl-2 border-l border-border/40">
+                    <div className="flex items-center gap-1.5">
+                      <Label className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Rental Rate (₹/day per {matUnit || 'Unit'}):</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={matRentalRate}
+                        onChange={e => setMatRentalRate(e.target.value)}
+                        placeholder="50"
+                        className="h-8 w-24 text-xs font-semibold text-amber-600 dark:text-amber-400"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <Label className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Deploy directly to Site:</Label>
+                      <Select value={rentalDeploySiteId} onValueChange={setRentalDeploySiteId}>
+                        <SelectTrigger className="h-8 w-44 text-xs font-semibold">
+                          <SelectValue placeholder="Catalog Only (No Site)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Catalog Only (No Site)</SelectItem>
+                          {sites.filter(s => s.status !== 'completed').map(s => (
+                            <SelectItem key={s.id} value={s.id}>
+                              {s.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  type="submit"
+                  className="flex-1 h-10 rounded-xl text-white font-bold text-xs shadow-sm"
+                  style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
+                >
+                  {editingMatId ? (isRentalMat ? 'Update Rental Preset' : 'Update Material Preset') : (isRentalMat ? 'Add Rental Preset' : 'Add Material Preset')}
+                </Button>
+                {editingMatId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setEditingMatId(null);
+                      setMatName('');
+                      setMatCategory('Civil & Structural');
+                      setMatUnit('');
+                      setMatRate('');
+                      setIsRentalMat(false);
+                      setMatRentalRate('');
+                      setRentalDeploySiteId('');
+                    }}
+                    className="h-10 rounded-xl text-xs font-semibold"
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
             </form>
+          </div>
+
+          {/* Type Filter Pills: All / Consumables / Rentals */}
+          <div className="flex flex-wrap items-center gap-1.5 p-1 bg-muted/40 rounded-xl border border-border/50 w-fit">
+            <button
+              type="button"
+              onClick={() => setMatTypeFilter('all')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                matTypeFilter === 'all'
+                  ? 'bg-primary text-white shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              All ({materialSettings.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setMatTypeFilter('standard')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                matTypeFilter === 'standard'
+                  ? 'bg-primary text-white shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Standard Consumables ({materialSettings.filter(m => !m.isRental).length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setMatTypeFilter('rental')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+                matTypeFilter === 'rental'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <span>🔄</span> Rental Materials ({materialSettings.filter(m => m.isRental).length})
+            </button>
+          </div>
+
+          {/* Category Filter Pills */}
+          <div className="flex flex-wrap items-center gap-1.5 p-1 bg-muted/30 rounded-xl border border-border/50">
+            <button
+              type="button"
+              onClick={() => setSelectedMatCategoryFilter('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                selectedMatCategoryFilter === 'all'
+                  ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                  : 'bg-card text-muted-foreground hover:text-foreground border-border/60 hover:bg-muted/60'
+              }`}
+            >
+              All Categories ({materialSettings.length})
+            </button>
+            {MATERIAL_CATEGORIES.map(cat => {
+              const count = materialSettings.filter(m => (m.category || 'General').toLowerCase() === cat.toLowerCase()).length;
+              if (count === 0 && selectedMatCategoryFilter !== cat) return null;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setSelectedMatCategoryFilter(cat)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
+                    selectedMatCategoryFilter === cat
+                      ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                      : 'bg-card text-muted-foreground hover:text-foreground border-border/60 hover:bg-muted/60'
+                  }`}
+                >
+                  {cat} ({count})
+                </button>
+              );
+            })}
           </div>
 
           {filteredMaterialSettings.length === 0 ? (
             <div className="text-center py-12 bg-muted/20 rounded-2xl border border-dashed border-border/60">
               <Package className="w-9 h-9 mx-auto text-muted-foreground/40 mb-2" />
               <p className="text-xs font-semibold text-muted-foreground">
-                {searchQuery ? `No material presets matching "${searchQuery}"` : 'No material presets saved yet'}
+                {searchQuery || selectedMatCategoryFilter !== 'all'
+                  ? `No material presets matching filter or search`
+                  : 'No material presets saved yet'}
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {filteredMaterialSettings.map(m => (
-                <Card key={m.id} className="p-3.5 rounded-xl bg-card border border-border/50 flex items-center justify-between text-xs">
-                  <div>
-                    <h5 className="font-bold text-foreground text-sm">{m.name}</h5>
-                    <p className="text-muted-foreground mt-0.5">
-                      Unit: {m.unit} · Rate: <strong className="text-primary font-bold">₹{m.defaultRate || 0}</strong>
+                <Card
+                  key={m.id}
+                  className="p-3.5 rounded-xl bg-card border border-border/50 flex flex-col justify-between gap-2.5 text-xs hover:border-primary/40 transition-all shadow-2xs"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-primary/10 text-primary border border-primary/20 truncate max-w-[190px]">
+                        {m.category || 'General'}
+                      </span>
+                      {m.isRental && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                          Rental
+                        </span>
+                      )}
+                    </div>
+                    <h5 className="font-bold text-foreground text-sm line-clamp-1">{m.name}</h5>
+                    <p className="text-muted-foreground">
+                      Unit: <span className="font-semibold text-foreground">{m.unit || 'Unit'}</span>
+                      {m.isRental && m.rentalRatePerDay ? ` · Rental: ₹${m.rentalRatePerDay}/day` : ''}
                     </p>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => {
-                      deleteMaterialSetting(m.id);
-                      toast.success('Preset deleted');
-                    }}
-                    className="h-7 w-7 text-destructive"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </Button>
+                  <div className="flex items-center justify-end gap-1 pt-1 border-t border-border/30">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditingMatId(m.id);
+                        setMatName(m.name);
+                        setMatCategory(m.category || 'Civil & Structural');
+                        setMatUnit(m.unit || '');
+                        setIsRentalMat(Boolean(m.isRental));
+                        setMatRentalRate(m.rentalRatePerDay ? m.rentalRatePerDay.toString() : '');
+                      }}
+                      className="h-7 px-2.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground gap-1"
+                    >
+                      <PenLine className="w-3 h-3" /> Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        deleteMaterialSetting(m.id);
+                        toast.success('Preset deleted');
+                      }}
+                      className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
                 </Card>
               ))}
             </div>
@@ -1814,7 +2511,7 @@ export const MaterialsSuppliersTab = () => {
         const sup = selectedSupplierForLedger;
         const supOrders = (materialRequests || [])
           .filter(r => r.supplierId === sup.id || r.supplierName === sup.name)
-          .sort((a, b) => new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime());
+          .sort((a, b) => getReqTimestamp(b) - getReqTimestamp(a));
 
         const totalBilled = supOrders.reduce(
           (sum, r) => sum + (r.supplierPrice ?? r.materialCost ?? r.items?.reduce((s, it) => s + (it.amount || (it.rate || 0) * it.quantity), 0) ?? 0),
@@ -1935,11 +2632,22 @@ export const MaterialsSuppliersTab = () => {
                                   <strong className="text-foreground">{it.name}</strong>
                                   <span className="text-muted-foreground font-semibold">({it.quantity} {it.unit || 'Unit'})</span>
                                   <span className="text-primary font-bold text-[10px] bg-primary/10 px-2 py-0.5 rounded border border-primary/20">
-                                    Supplier Rate: ₹{it.rate || 0} / {it.unit || 'Unit'}
+                                    Rate: ₹{it.supplierRate ?? it.rate ?? 0} / {it.unit || 'Unit'}
                                   </span>
+                                  {(it.gstAmount || 0) > 0 && (
+                                    it.gstType === 'cgst_sgst' ? (
+                                      <span className="text-blue-700 dark:text-blue-400 font-bold text-[10px] bg-blue-500/10 px-1.5 py-0.2 rounded border border-blue-500/20">
+                                        CGST {it.cgstRate}% (₹{it.cgstAmount}) + SGST {it.sgstRate}% (₹{it.sgstAmount})
+                                      </span>
+                                    ) : (
+                                      <span className="text-emerald-700 dark:text-emerald-400 font-bold text-[10px] bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                                        +{it.gstRate}% GST (₹{it.gstAmount?.toLocaleString()})
+                                      </span>
+                                    )
+                                  )}
                                 </div>
                                 <span className="font-bold text-foreground font-mono">
-                                  {it.rate ? `${it.quantity} ${it.unit || 'units'} × ₹${it.rate} = ` : ''}₹{(it.amount || (it.rate || 0) * it.quantity).toLocaleString()}
+                                  {it.rate ? `${it.quantity} ${it.unit || 'units'} × ₹${it.supplierRate ?? it.rate} = ` : ''}₹{((it.supplierAmount || it.amount || ((it.supplierRate ?? it.rate ?? 0) * it.quantity)) + (it.gstAmount || 0)).toLocaleString()}
                                 </span>
                               </div>
                             ))}
@@ -1951,20 +2659,20 @@ export const MaterialsSuppliersTab = () => {
                                     ₹{((req.supplierPrice || req.materialCost || 0) - req.gstAmount!).toLocaleString()}
                                   </span>
                                 </div>
-                                {req.gstType === 'inter-state' ? (
+                                {req.gstType === 'inter-state' || req.gstType === 'igst' ? (
                                   <div className="flex justify-between items-center text-[11px] text-muted-foreground px-2">
                                     <span>IGST ({req.igstRate || 0}%):</span>
-                                    <span className="font-mono font-semibold text-foreground">₹{req.gstAmount?.toLocaleString()}</span>
+                                    <span className="font-mono font-semibold text-foreground">₹{(req.igstAmount ?? req.gstAmount)?.toLocaleString()}</span>
                                   </div>
                                 ) : (
                                   <>
                                     <div className="flex justify-between items-center text-[11px] text-muted-foreground px-2">
-                                      <span>CGST ({req.cgstRate || ((req.igstRate || 0) / 2)}%):</span>
-                                      <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                      <span>CGST ({req.cgstRate || ((req.gstRate || 0) / 2)}%):</span>
+                                      <span className="font-mono font-semibold text-foreground">₹{(req.cgstAmount ?? ((req.gstAmount || 0) / 2)).toLocaleString()}</span>
                                     </div>
                                     <div className="flex justify-between items-center text-[11px] text-muted-foreground px-2">
-                                      <span>SGST ({req.sgstRate || ((req.igstRate || 0) / 2)}%):</span>
-                                      <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                      <span>SGST ({req.sgstRate || ((req.gstRate || 0) / 2)}%):</span>
+                                      <span className="font-mono font-semibold text-foreground">₹{(req.sgstAmount ?? ((req.gstAmount || 0) / 2)).toLocaleString()}</span>
                                     </div>
                                   </>
                                 )}
@@ -2032,25 +2740,23 @@ export const MaterialsSuppliersTab = () => {
                             </div>
 
                             <div className="flex items-center gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setCompleteModal({ open: true, request: req })}
+                                className="h-7 text-[11px] font-semibold gap-1 rounded-lg border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10"
+                              >
+                                <PenLine className="w-3 h-3" /> Edit Rates & GST
+                              </Button>
                               {orderBal > 0 ? (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => openRateEditModal(req)}
-                                    className="h-7 text-[11px] font-semibold gap-1 rounded-lg"
-                                  >
-                                    <IndianRupee className="w-3 h-3 text-muted-foreground" /> Edit Rates
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => openPayModal(req)}
-                                    className="h-7 text-[11px] font-bold gap-1 rounded-lg text-white"
-                                    style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
-                                  >
-                                    <CreditCard className="w-3 h-3" /> Record Payment
-                                  </Button>
-                                </>
+                                <Button
+                                  size="sm"
+                                  onClick={() => openPayModal(req)}
+                                  className="h-7 text-[11px] font-bold gap-1 rounded-lg text-white"
+                                  style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
+                                >
+                                  <CreditCard className="w-3 h-3" /> Record Payment
+                                </Button>
                               ) : (
                                 <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 font-bold text-[11px] flex items-center gap-1 border border-emerald-500/25">
                                   <CheckCircle2 className="w-3.5 h-3.5" /> Payment Completed
@@ -2579,9 +3285,9 @@ export const MaterialsSuppliersTab = () => {
                       <SelectValue placeholder="Select from Rental Material Catalog" />
                     </SelectTrigger>
                     <SelectContent>
-                      {materialSettings.map(m => (
+                      {materialSettings.filter(m => m.isRental).map(m => (
                         <SelectItem key={m.id} value={m.id}>
-                          {m.name} {m.isRental ? '★ Rental' : ''} {m.rentalRatePerDay ? `(₹${m.rentalRatePerDay}/day)` : ''}
+                          {m.name} {m.rentalRatePerDay ? `(₹${m.rentalRatePerDay}/day)` : ''}
                         </SelectItem>
                       ))}
                       <SelectItem value="custom">+ Custom / Enter Name Manually</SelectItem>
@@ -2711,15 +3417,25 @@ export const MaterialsSuppliersTab = () => {
               {rentalRequiresDriver && (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-border/40">
                   <div className="space-y-1">
-                    <Label className="text-[11px] font-semibold">Assign Driver</Label>
+                    <Label className="text-[11px] font-semibold flex items-center justify-between">
+                      <span>Assign Driver</span>
+                      {presentDriversList.length > 0 && (
+                        <span className="text-[9px] text-emerald-600 font-bold">({presentDriversList.length} Present)</span>
+                      )}
+                    </Label>
                     <Select value={rentalDriverId} onValueChange={setRentalDriverId}>
                       <SelectTrigger className="h-8 text-xs">
                         <SelectValue placeholder="Select Driver" />
                       </SelectTrigger>
                       <SelectContent>
-                        {driversList.map(d => (
-                          <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
-                        ))}
+                        {(presentDriversList.length > 0 ? presentDriversList : driversList).map(d => {
+                          const isPresent = presentDriversList.some(p => p.id === d.id);
+                          return (
+                            <SelectItem key={d.id} value={d.id}>
+                              🚚 {d.name} {isPresent ? '✓ (Present)' : ''}
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
                   </div>
@@ -2920,6 +3636,203 @@ export const MaterialsSuppliersTab = () => {
               </form>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── VENDOR DUES / TO GIVE VENDORS DETAILS MODAL ── */}
+      <Dialog open={showVendorDueModal} onOpenChange={setShowVendorDueModal}>
+        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto rounded-3xl p-6">
+          <DialogHeader className="pb-3 border-b border-border/50">
+            <DialogTitle className="text-base font-heading font-bold flex items-center gap-2 text-amber-600 dark:text-amber-400">
+              <Wallet className="w-5 h-5" />
+              Vendor Dues — How Much We Need to Give Vendors
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Complete breakdown of pending supplier balances and material purchase bills across all sites and orders.
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            {/* Top Summary Banner */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-muted-foreground block">Total Vendor Bills</span>
+                <span className="text-lg font-heading font-bold text-foreground">₹{vendorPaymentSummary.totalBilled.toLocaleString()}</span>
+                <p className="text-[10px] text-muted-foreground">Across all material orders</p>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold text-emerald-600 block">Total Amount Given</span>
+                <span className="text-lg font-heading font-bold text-emerald-600">₹{vendorPaymentSummary.totalPaid.toLocaleString()}</span>
+                <p className="text-[10px] text-muted-foreground">Paid with recorded receipts</p>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400 block">Total to Give Vendors</span>
+                <span className="text-lg font-heading font-black text-amber-600 dark:text-amber-400">₹{vendorPaymentSummary.totalToGiveVendors.toLocaleString()}</span>
+                <p className="text-[10px] text-muted-foreground">{vendorPaymentSummary.vendorsWithDueCount} vendor(s) with pending dues</p>
+              </div>
+            </div>
+
+            {/* List of Vendors */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  Vendors & Supplier Ledgers ({vendorPaymentSummary.vendorsList.length})
+                </h4>
+                <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                  {vendorPaymentSummary.vendorsWithDueCount} Unpaid
+                </span>
+              </div>
+
+              {vendorPaymentSummary.vendorsList.length === 0 ? (
+                <div className="text-center py-8 bg-muted/20 rounded-2xl border border-border/50 text-xs text-muted-foreground">
+                  No vendor or supplier orders found yet.
+                </div>
+              ) : (
+                vendorPaymentSummary.vendorsList.map(v => {
+                  const hasDue = v.balance > 0;
+                  const matchingSupplier = (suppliers || []).find(s => s.name.toLowerCase() === v.name.toLowerCase() || s.id === v.supplierId);
+
+                  return (
+                    <Card
+                      key={v.name}
+                      className={`p-4 rounded-2xl border transition-all ${
+                        hasDue
+                          ? 'border-amber-500/40 bg-card shadow-xs'
+                          : 'border-border/40 bg-muted/20 opacity-80'
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-border/40">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                            hasDue ? 'bg-amber-500/15 text-amber-600' : 'bg-emerald-500/15 text-emerald-600'
+                          }`}>
+                            <Building2 className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-bold text-sm text-foreground">{v.name}</h5>
+                              {hasDue ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                                  ₹{v.balance.toLocaleString()} to give
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 border border-emerald-500/25">
+                                  All Settled ✓
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {v.phone ? `Phone: ${v.phone} · ` : ''}{v.ordersCount} total orders ({v.unpaidOrdersCount} pending balance)
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {matchingSupplier && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setShowVendorDueModal(false);
+                                setActiveSubTab('suppliers');
+                                setSelectedSupplierForLedger(matchingSupplier);
+                              }}
+                              className="h-8 text-xs font-semibold rounded-xl border-border/70 hover:bg-muted"
+                            >
+                              Open Ledger
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Financial Strip for this vendor */}
+                      <div className="grid grid-cols-3 gap-2 pt-2.5 text-xs text-center">
+                        <div className="p-2 rounded-xl bg-muted/40">
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground block">Billed</span>
+                          <span className="font-bold text-foreground">₹{v.billed.toLocaleString()}</span>
+                        </div>
+                        <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+                          <span className="text-[10px] uppercase font-bold block">Given</span>
+                          <span className="font-bold">₹{v.paid.toLocaleString()}</span>
+                        </div>
+                        <div className={`p-2 rounded-xl ${
+                          hasDue ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 font-extrabold' : 'bg-muted/40 text-muted-foreground'
+                        }`}>
+                          <span className="text-[10px] uppercase font-bold block">To Give</span>
+                          <span className="font-bold">₹{v.balance.toLocaleString()}</span>
+                        </div>
+                      </div>
+
+                      {/* Orders pending under this vendor */}
+                      {hasDue && (
+                        <div className="space-y-1.5 pt-2">
+                          <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                            Orders Awaiting Payment:
+                          </span>
+                          <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                            {v.orders
+                              .filter(r => {
+                                const cost = (r.items || []).reduce((s, it) => s + (it.supplierAmount ?? (it.supplierRate ?? it.rate ?? 0) * it.quantity), 0);
+                                const bill = r.supplierPrice ?? cost;
+                                return Math.max(0, bill - (r.supplierPaidAmount || 0)) > 0;
+                              })
+                              .map(order => {
+                                const cost = (order.items || []).reduce((s, it) => s + (it.supplierAmount ?? (it.supplierRate ?? it.rate ?? 0) * it.quantity), 0);
+                                const bill = order.supplierPrice ?? cost;
+                                const paid = order.supplierPaidAmount || 0;
+                                const bal = Math.max(0, bill - paid);
+
+                                return (
+                                  <div
+                                    key={order.id}
+                                    className="p-2 rounded-xl bg-muted/30 border border-border/40 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-1.5"
+                                  >
+                                    <div>
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <MapPin className="w-3 h-3 text-primary" />
+                                        <span className="font-bold text-foreground">{order.siteName}</span>
+                                        <span className="text-[10px] text-muted-foreground font-mono">({order.date})</span>
+                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.2 rounded ${
+                                          order.status === 'completed' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-blue-500/10 text-blue-600'
+                                        }`}>
+                                          {order.status}
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                                        {(order.items || []).map(i => `${i.name} (${i.quantity} ${i.unit || 'unit'})`).join(', ')}
+                                      </p>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                                      <div className="text-right">
+                                        <span className="text-[10px] text-muted-foreground block">Balance Due:</span>
+                                        <span className="font-bold text-amber-600 dark:text-amber-400 font-mono">
+                                          ₹{bal.toLocaleString()}
+                                        </span>
+                                      </div>
+                                      <Button
+                                        size="sm"
+                                        onClick={() => {
+                                          setShowVendorDueModal(false);
+                                          openPayModal(order);
+                                        }}
+                                        className="h-7 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                      >
+                                        <CreditCard className="w-3 h-3" /> Pay
+                                      </Button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+                    </Card>
+                  );
+                })
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

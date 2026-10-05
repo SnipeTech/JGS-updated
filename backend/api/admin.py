@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     Staff, Site, Customer, Product, Quotation, ManualExpense,
     Vendor, WorkEntry, DailyLog, Attendance, MaterialSetting,
-    MaterialRental, Supplier, Vehicle, MaterialRequest,
+    MaterialRental, Supplier, Vehicle, VehicleMaintenance, MaterialRequest,
     PayrollPaidStatus, PayrollHistory, AppConfig
 )
 
@@ -71,7 +71,8 @@ class AttendanceAdmin(admin.ModelAdmin):
 
 @admin.register(MaterialSetting)
 class MaterialSettingAdmin(admin.ModelAdmin):
-    list_display = ('name', 'unit', 'default_rate', 'is_rental', 'rental_rate_per_day')
+    list_display = ('name', 'category', 'unit', 'default_rate', 'is_rental', 'rental_rate_per_day')
+    list_filter = ('category', 'is_rental')
 
 
 @admin.register(MaterialRental)
@@ -90,6 +91,13 @@ class SupplierAdmin(admin.ModelAdmin):
 class VehicleAdmin(admin.ModelAdmin):
     list_display = ('name', 'number', 'type')
     search_fields = ('name', 'number')
+
+
+@admin.register(VehicleMaintenance)
+class VehicleMaintenanceAdmin(admin.ModelAdmin):
+    list_display = ('vehicle_name', 'vehicle_number', 'type', 'cost', 'date', 'workshop_name')
+    list_filter = ('type', 'date')
+    search_fields = ('vehicle_name', 'vehicle_number', 'workshop_name')
 
 
 @admin.register(MaterialRequest)

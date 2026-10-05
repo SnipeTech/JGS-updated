@@ -11,7 +11,7 @@ interface ThisWeekTabProps {
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
-  const { dailyLogs, attendances, staffList, currentUser } = useApp();
+  const { dailyLogs, attendances, staffList, currentUser, materialRequests } = useApp();
 
   const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
   const weekDates = Array.from({ length: 6 }, (_, i) => addDays(weekStart, i));
@@ -129,20 +129,31 @@ export const ThisWeekTab = ({ staff }: ThisWeekTabProps) => {
                         <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1.5">
                           Materials Logged
                         </p>
-                        {log.materials.length === 0 ? (
-                          <p className="text-xs text-muted-foreground italic">No materials logged</p>
-                        ) : (
-                          <div className="space-y-1 bg-muted/30 p-2 rounded-lg">
-                            {log.materials.map((m, idx) => (
-                              <div key={idx} className="flex justify-between items-center text-xs py-0.5">
-                                <span className="truncate pr-2 font-medium">{m.name}</span>
-                                <span className="font-semibold tabular-nums shrink-0 text-primary">
-                                  × {m.quantity}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        {(() => {
+                          // Gather all material request items for this site on this date
+                          const siteMaterials = (materialRequests || []).filter(r =>
+                            r.siteId === log.siteId && r.date === log.date
+                          );
+                          const allItems = siteMaterials.flatMap(r => r.items || []);
+                          if (allItems.length === 0 && (!log.materials || log.materials.length === 0)) {
+                            return <p className="text-xs text-muted-foreground italic">No materials logged</p>;
+                          }
+                          // Merge log.materials (legacy) + material request items
+                          const legacyItems = (log.materials || []).map(m => ({ name: m.name, quantity: m.quantity, unit: (m as any).unit }));
+                          const combined = [...legacyItems, ...allItems];
+                          return (
+                            <div className="space-y-1 bg-muted/30 p-2 rounded-lg">
+                              {combined.map((m, idx) => (
+                                <div key={idx} className="flex justify-between items-center text-xs py-0.5">
+                                  <span className="truncate pr-2 font-medium">{m.name}</span>
+                                  <span className="font-semibold tabular-nums shrink-0 text-primary">
+                                    × {m.quantity}{m.unit ? ` ${m.unit}` : ''}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </Card>

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,7 @@ import {
   Package, MapPin, Plus, Trash2, ArrowRightLeft, Building2,
   Clock, Truck, CheckCircle2, AlertCircle, Send, StickyNote
 } from 'lucide-react';
-import { MaterialRequestItem, Site, Staff } from '@/types';
+import { MaterialRequestItem, Site, Staff, MATERIAL_CATEGORIES } from '@/types';
 import { calculateDuration, getSiteAvailableStock } from '@/lib/utils';
 
 interface MaterialRequestTabProps {
@@ -22,68 +22,62 @@ interface MaterialRequestTabProps {
 }
 
 export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRequestTabProps) => {
-  const { sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest, paymentStageMaster, unitMaster } = useApp();
+  const { currentUser, sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest, paymentStageMaster, unitMaster } = useApp();
 
   const [reqSiteId, setReqSiteId] = useState(initialSiteId || localStorage.getItem('today_active_site_id') || '');
   const [reqSourceType, setReqSourceType] = useState<'supplier' | 'site'>('supplier');
   const [reqSourceSiteId, setReqSourceSiteId] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [reqItems, setReqItems] = useState<MaterialRequestItem[]>([
     { name: '', quantity: 1, unit: 'Bags' }
   ]);
   const [reqNotes, setReqNotes] = useState('');
   const [reqStatusFilter, setReqStatusFilter] = useState<'all' | 'pending' | 'assigned' | 'completed'>('all');
 
-  const destinationReqSiteId = reqSiteId || localStorage.getItem('today_active_site_id') || (mySites.length > 0 ? mySites[0].id : (sites[0]?.id || ''));
+  const availableSites = useMemo(() => {
+    return (mySites && mySites.length > 0) ? mySites : sites;
+  }, [mySites, sites]);
+
+  const effectiveReqSiteId = useMemo(() => {
+    if (reqSiteId && availableSites.some(s => s.id === reqSiteId)) return reqSiteId;
+    if (initialSiteId && availableSites.some(s => s.id === initialSiteId)) return initialSiteId;
+    return availableSites[0]?.id || (sites[0]?.id || '');
+  }, [reqSiteId, initialSiteId, availableSites, sites]);
+
+  const destinationReqSiteId = effectiveReqSiteId;
 
   // Other sites available as source
   const otherSites = useMemo(() => {
     return sites.filter(s => s.id !== destinationReqSiteId);
   }, [sites, destinationReqSiteId]);
 
-  // Sites that strictly have available material stock
-  const sourceSitesWithStock = useMemo(() => {
-    return otherSites.filter(s => {
-      const stock = getSiteAvailableStock(s.id, materialRequests, dailyLogs, materialSettings);
-      return stock.length > 0;
+  // Site stock map - strictly evaluated only when in 'site' transfer mode
+  const siteStockMap = useMemo(() => {
+    if (reqSourceType !== 'site') return {};
+    const map: Record<string, ReturnType<typeof getSiteAvailableStock>> = {};
+    otherSites.forEach(s => {
+      map[s.id] = getSiteAvailableStock(s.id, materialRequests, dailyLogs, materialSettings);
     });
-  }, [otherSites, materialRequests, dailyLogs, materialSettings]);
+    return map;
+  }, [reqSourceType, otherSites, materialRequests, dailyLogs, materialSettings]);
+
+  const sourceSitesWithStock = useMemo(() => {
+    if (reqSourceType !== 'site') return [];
+    return otherSites.filter(s => (siteStockMap[s.id] || []).length > 0);
+  }, [reqSourceType, otherSites, siteStockMap]);
 
   const effectiveSourceSiteId = useMemo(() => {
+    if (reqSourceType !== 'site') return '';
     if (reqSourceSiteId && otherSites.some(s => s.id === reqSourceSiteId)) {
       return reqSourceSiteId;
     }
     return sourceSitesWithStock[0]?.id || (otherSites[0]?.id || '');
-  }, [reqSourceSiteId, otherSites, sourceSitesWithStock]);
+  }, [reqSourceType, reqSourceSiteId, otherSites, sourceSitesWithStock]);
 
   const sourceAvailableStock = useMemo(() => {
-    if (!effectiveSourceSiteId) return [];
-    return getSiteAvailableStock(effectiveSourceSiteId, materialRequests, dailyLogs, materialSettings);
-  }, [effectiveSourceSiteId, materialRequests, dailyLogs, materialSettings]);
-
-  useEffect(() => {
-    if (reqSourceType === 'site' && effectiveSourceSiteId) {
-      if (reqSourceSiteId !== effectiveSourceSiteId) {
-        setReqSourceSiteId(effectiveSourceSiteId);
-      }
-      const stock = getSiteAvailableStock(effectiveSourceSiteId, materialRequests, dailyLogs, materialSettings);
-      if (stock.length > 0) {
-        setReqItems(prev => {
-          if (prev.length === 1 && (!prev[0].name || !prev[0].name.trim())) {
-            const first = stock[0];
-            return [{
-              name: first.name,
-              quantity: Math.min(1, first.qty),
-              unit: first.unit,
-              rate: first.rate,
-              amount: Math.min(1, first.qty) * first.rate,
-              maxAvailable: first.qty
-            }];
-          }
-          return prev;
-        });
-      }
-    }
-  }, [reqSourceType, effectiveSourceSiteId, reqSourceSiteId, materialRequests, dailyLogs, materialSettings]);
+    if (reqSourceType !== 'site' || !effectiveSourceSiteId) return [];
+    return siteStockMap[effectiveSourceSiteId] || [];
+  }, [reqSourceType, effectiveSourceSiteId, siteStockMap]);
 
   const handleAddReqItem = () => {
     if (reqSourceType === 'site') {
@@ -130,6 +124,11 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
           }
           updated.amount = (Number(updated.quantity) || 0) * found.rate;
         }
+      } else if (field === 'name' && reqSourceType === 'supplier') {
+        const foundSetting = materialSettings.find(s => s.name.toLowerCase() === String(value).trim().toLowerCase());
+        if (foundSetting && foundSetting.unit) {
+          updated.unit = foundSetting.unit;
+        }
       }
       return updated;
     }));
@@ -137,12 +136,12 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
 
   const handleSubmitMaterialRequest = (e: React.FormEvent) => {
     e.preventDefault();
-    const finalSiteId = reqSiteId || (mySites.length > 0 ? mySites[0].id : (sites[0]?.id || ''));
-    const targetSite = sites.find(s => s.id === finalSiteId);
+    const finalSiteId = effectiveReqSiteId;
+    const targetSite = sites.find(s => s.id === finalSiteId) || availableSites[0];
     const sourceSite = reqSourceType === 'site' ? sites.find(s => s.id === effectiveSourceSiteId) : undefined;
 
     if (!targetSite) {
-      toast.error('Please select a valid destination site');
+      toast.error('Please create or select a valid project site first');
       return;
     }
     if (reqSourceType === 'site' && !sourceSite) {
@@ -179,11 +178,14 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
       }
     }
 
+    const activeStaffId = staff?.id || currentUser?.id || 'supervisor';
+    const activeStaffName = staff?.name || currentUser?.name || 'Site Supervisor';
+
     addMaterialRequest({
       siteId: targetSite.id,
       siteName: targetSite.name,
-      requestedByStaffId: staff?.id || '',
-      requestedByStaffName: staff?.name || 'Staff Member',
+      requestedByStaffId: activeStaffId,
+      requestedByStaffName: activeStaffName,
       sourceType: reqSourceType,
       sourceSiteId: reqSourceType === 'site' ? sourceSite?.id : undefined,
       sourceSiteName: reqSourceType === 'site' ? sourceSite?.name : undefined,
@@ -198,15 +200,17 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
       status: 'pending',
       workLevelStage: activeStageForReq,
       date: format(new Date(), 'yyyy-MM-dd'),
-      time: format(new Date(), 'hh:mm a')
+      time: format(new Date(), 'hh:mm a'),
+      createdAt: new Date().toISOString()
     });
 
     toast.success(reqSourceType === 'site'
       ? `Inter-site material transfer request submitted to Admin!`
-      : 'Material requisition submitted to Admin!'
+      : `Material requisition for ${validItems.length} item(s) submitted to Admin!`
     );
     setReqItems([{ name: '', quantity: 1, unit: 'Bags' }]);
     setReqNotes('');
+    setReqStatusFilter('all');
   };
 
   return (
@@ -270,7 +274,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                 <MapPin className="w-3.5 h-3.5 text-primary" /> Destination Site (Receiving)
               </Label>
               <Select
-                value={reqSiteId || (mySites[0]?.id || '')}
+                value={effectiveReqSiteId}
                 onValueChange={val => {
                   setReqSiteId(val);
                   if (reqSourceSiteId === val) {
@@ -282,7 +286,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                   <SelectValue placeholder="Select Destination Site" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(mySites.length > 0 ? mySites : sites).map(s => (
+                  {availableSites.map(s => (
                     <SelectItem key={s.id} value={s.id}>
                       {s.name} ({s.clientName})
                     </SelectItem>
@@ -305,7 +309,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                     value={effectiveSourceSiteId || ''}
                     onValueChange={val => {
                       setReqSourceSiteId(val);
-                      const stock = getSiteAvailableStock(val, materialRequests, dailyLogs, materialSettings);
+                      const stock = siteStockMap[val] || [];
                       if (stock.length > 0) {
                         setReqItems([{
                           name: stock[0].name,
@@ -325,10 +329,10 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                     </SelectTrigger>
                     <SelectContent>
                       {otherSites.map(s => {
-                        const availStock = getSiteAvailableStock(s.id, materialRequests, dailyLogs, materialSettings);
+                        const stockCount = (siteStockMap[s.id] || []).length;
                         return (
                           <SelectItem key={s.id} value={s.id}>
-                            {s.name} {availStock.length > 0 ? `(${availStock.length} materials in stock)` : '(No stock)'}
+                            {s.name} {stockCount > 0 ? `(${stockCount} materials in stock)` : '(No stock)'}
                           </SelectItem>
                         );
                       })}
@@ -357,42 +361,91 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
               </Button>
             </div>
 
-            {/* Quick Add Chips for Supplier mode */}
+            {/* Quick Add Chips for Supplier mode with Category Filter */}
             {reqSourceType === 'supplier' && (
-              <div className="bg-muted/30 p-2.5 rounded-xl border border-border/40 space-y-1.5">
-                <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
-                  Quick Add Common Materials
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    { name: 'Cement Bag (50kg)', unit: 'Bags', qty: 10 },
-                    { name: 'M-Sand', unit: 'Tons', qty: 2 },
-                    { name: 'Jalli (Aggregate)', unit: 'Tons', qty: 1 },
-                    { name: 'Red Bricks', unit: 'Nos', qty: 500 },
-                    { name: 'Interior Paint (White)', unit: 'Liters', qty: 20 },
-                    { name: 'Wall Putty', unit: 'Bags', qty: 5 },
-                  ].map((chip, cIdx) => (
+              <div className="bg-muted/30 p-3 rounded-xl border border-border/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider flex items-center gap-1.5">
+                    <span>📦</span> Material Category Filter:
+                  </p>
+                  <span className="text-[10px] text-primary font-semibold">
+                    Click material to add to list
+                  </span>
+                </div>
+
+                {/* Category Pills */}
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory('all')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all border ${
+                      selectedCategory === 'all'
+                        ? 'bg-primary text-primary-foreground border-primary shadow-2xs'
+                        : 'bg-background hover:bg-muted text-muted-foreground border-border/60'
+                    }`}
+                  >
+                    All ({materialSettings.length})
+                  </button>
+                  {MATERIAL_CATEGORIES.map(cat => {
+                    const count = materialSettings.filter(m => (m.category || 'General').toLowerCase() === cat.toLowerCase()).length;
+                    if (count === 0 && selectedCategory !== cat) return null;
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all border ${
+                          selectedCategory === cat
+                            ? 'bg-primary text-primary-foreground border-primary shadow-2xs'
+                            : 'bg-background hover:bg-muted text-muted-foreground border-border/60'
+                        }`}
+                      >
+                        {cat} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Material Chips */}
+                <div className="flex flex-wrap gap-1.5 pt-1 max-h-36 overflow-y-auto">
+                  {(materialSettings.filter(m =>
+                    !m.isRental && (selectedCategory === 'all' || (m.category || 'General').toLowerCase() === selectedCategory.toLowerCase())
+                  )).map(chip => (
                     <button
-                      key={cIdx}
+                      key={chip.id}
                       type="button"
                       onClick={() => {
                         setReqItems(prev => {
-                          const hasEmptyFirst = prev.length === 1 && !prev[0].name.trim() && !prev[0].quantity;
+                          const hasEmptyFirst = prev.length === 1 && !prev[0].name.trim();
                           if (hasEmptyFirst) {
-                            return [{ name: chip.name, quantity: chip.qty, unit: chip.unit }];
+                            return [{ name: chip.name, quantity: 1, unit: chip.unit || 'Unit' }];
                           }
-                          return [...prev, { name: chip.name, quantity: chip.qty, unit: chip.unit }];
+                          return [...prev, { name: chip.name, quantity: 1, unit: chip.unit || 'Unit' }];
                         });
-                        toast.info(`Added ${chip.name} to requisition`);
+                        toast.info(`Added ${chip.name} (${chip.category || 'General'})`);
                       }}
-                      className="text-[11px] font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/25 rounded-lg px-2.5 py-1 transition-all active:scale-95 flex items-center gap-1"
+                      className="text-[11px] font-semibold bg-background hover:bg-primary/10 text-foreground hover:text-primary border border-border/70 hover:border-primary/40 rounded-lg px-2.5 py-1 transition-all active:scale-95 flex items-center gap-1.5 shadow-2xs"
                     >
-                      <Plus className="w-3 h-3" /> {chip.name}
+                      <Plus className="w-3 h-3 text-primary shrink-0" />
+                      <span>{chip.name}</span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-primary/10 text-primary">
+                        {chip.category || 'General'}
+                      </span>
+                      {chip.unit && <span className="text-[10px] text-muted-foreground font-mono">({chip.unit})</span>}
                     </button>
                   ))}
                 </div>
               </div>
             )}
+
+            {/* Hidden Datalist for autocomplete typing */}
+            <datalist id="staff-material-presets">
+              {materialSettings.filter(m => !m.isRental).map(m => (
+                <option key={m.id} value={m.name}>
+                  {m.category || 'General'} · {m.unit || 'Unit'}
+                </option>
+              ))}
+            </datalist>
 
             {/* Material input items list */}
             <div className="space-y-2.5">
@@ -434,7 +487,8 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                           </Select>
                         ) : (
                           <Input
-                            placeholder="e.g. UltraTech Cement, 20mm Jalli, Asian Paints..."
+                            list="staff-material-presets"
+                            placeholder="e.g. Cement Bag, M-Sand, Paints..."
                             value={item.name}
                             onChange={e => handleUpdateReqItem(idx, 'name', e.target.value)}
                             className="h-10 rounded-xl text-xs"
@@ -529,42 +583,34 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
         </form>
       </div>
 
-      {/* Staff Requisitions Tracking List */}
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h3 className="section-header mb-0">Requisition Status & Tracking</h3>
-            <p className="text-xs text-muted-foreground">Real-time status of driver, supplier, and vehicle allocations</p>
-          </div>
-
-          {/* Status Filters */}
-          <div className="flex gap-1.5 bg-muted/60 p-1 rounded-xl">
-            {(['all', 'pending', 'assigned', 'completed'] as const).map(tab => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setReqStatusFilter(tab)}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold capitalize transition-all ${reqStatusFilter === tab
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                  }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
+      {/* Staff Requisitions Tracking List — Grouped by Status */}
+      <div className="space-y-6">
+        <div>
+          <h3 className="section-header mb-0">Requisition Status & Tracking</h3>
+          <p className="text-xs text-muted-foreground">Real-time status of driver, supplier, and vehicle allocations</p>
         </div>
 
-        {/* Filtered list */}
         {(() => {
-          const filtered = (materialRequests || []).filter(r => {
-            const matchesSiteOrStaff = r.requestedByStaffId === staff?.id || mySites.some(s => s.id === r.siteId);
-            if (!matchesSiteOrStaff) return false;
-            if (reqStatusFilter === 'all') return true;
-            return r.status === reqStatusFilter;
-          }).sort((a, b) => new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime());
+          const activeStaffId = staff?.id || currentUser?.id;
+          const activeStaffName = (staff?.name || currentUser?.name || '').toLowerCase();
 
-          if (filtered.length === 0) {
+          const getTimestamp = (r: MaterialRequest) => {
+            if (r.createdAt) { const t = new Date(r.createdAt).getTime(); if (!isNaN(t)) return t; }
+            if (r.date) { const t = new Date(r.date).getTime(); if (!isNaN(t)) return t; }
+            if (r.id && r.id.startsWith('mr_')) { const num = Number(r.id.split('_')[1]); if (!isNaN(num)) return num; }
+            return 0;
+          };
+
+          const allFiltered = (materialRequests || []).filter(r => {
+            const matchesStaff = (activeStaffId && r.requestedByStaffId === activeStaffId) ||
+              (activeStaffName && r.requestedByStaffName?.toLowerCase().includes(activeStaffName));
+            const matchesSite = (mySites && mySites.length > 0)
+              ? mySites.some(s => s.id === r.siteId)
+              : sites.some(s => s.id === r.siteId);
+            return matchesStaff || matchesSite || currentUser?.role === 'staff' || currentUser?.role === 'admin' || staff?.role === 'supervisor';
+          }).sort((a, b) => getTimestamp(b) - getTimestamp(a));
+
+          if (allFiltered.length === 0) {
             return (
               <div className="text-center py-10 bg-card rounded-2xl border border-border/50">
                 <Package className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
@@ -574,182 +620,128 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
             );
           }
 
-          return (
-            <div className="space-y-3">
-              {filtered.map(req => {
-                const statusConfig = {
-                  pending: {
-                    label: 'Pending Admin Assignment',
-                    icon: <AlertCircle className="w-3.5 h-3.5" />,
-                    badgeClass: 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                  },
-                  assigned: {
-                    label: 'Driver Assigned & Dispatched',
-                    icon: <Truck className="w-3.5 h-3.5" />,
-                    badgeClass: 'bg-blue-500/10 text-blue-500 border-blue-500/20'
-                  },
-                  completed: {
-                    label: 'Delivered & Completed',
-                    icon: <CheckCircle2 className="w-3.5 h-3.5" />,
-                    badgeClass: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                  }
-                }[req.status];
+          type StatusKey = 'pending' | 'assigned' | 'completed';
+          const STATUS_GROUPS: { key: StatusKey; label: string; icon: React.ReactNode; headerClass: string; badgeClass: string; cardBorderClass: string }[] = [
+            { key: 'pending', label: 'Pending Admin Review', icon: <AlertCircle className="w-4 h-4" />, headerClass: 'border-amber-500/30 bg-amber-500/[0.06]', badgeClass: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30', cardBorderClass: 'border-amber-500/20' },
+            { key: 'assigned', label: 'Driver Assigned & En Route', icon: <Truck className="w-4 h-4" />, headerClass: 'border-blue-500/30 bg-blue-500/[0.06]', badgeClass: 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30', cardBorderClass: 'border-blue-500/20' },
+            { key: 'completed', label: 'Delivered & Completed', icon: <CheckCircle2 className="w-4 h-4" />, headerClass: 'border-emerald-500/30 bg-emerald-500/[0.06]', badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30', cardBorderClass: 'border-emerald-500/20' },
+          ];
 
-                return (
-                  <Card key={req.id} className="p-4 rounded-2xl border border-border/50 bg-card space-y-3 shadow-sm">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/40 pb-2.5">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <MapPin className="w-4 h-4 text-primary shrink-0" />
-                          <span className="font-heading font-bold text-sm text-foreground">{req.siteName}</span>
-                          {req.sourceType === 'site' && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
-                              <ArrowRightLeft className="w-3 h-3" /> From: {req.sourceSiteName || 'Another Site'}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[11px] text-muted-foreground mt-0.5">
-                          Requested on {(() => {
-                            if (req.createdAt) {
-                              try {
-                                const d = new Date(req.createdAt);
-                                if (!isNaN(d.getTime())) return format(d, 'dd MMM yyyy, hh:mm a');
-                              } catch { }
-                            }
-                            return `${req.date || 'Today'} ${req.time || ''}`.trim();
-                          })()}
-                        </p>
+          const renderCard = (req: MaterialRequest) => {
+            const statusKey = (req.status || 'pending') as StatusKey;
+            const group = STATUS_GROUPS.find(g => g.key === statusKey) || STATUS_GROUPS[0];
+            return (
+              <Card key={req.id} className={`p-4 rounded-2xl border bg-card space-y-3 shadow-sm ${group.cardBorderClass}`}>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/40 pb-2.5">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <MapPin className="w-4 h-4 text-primary shrink-0" />
+                      <span className="font-heading font-bold text-sm text-foreground">{req.siteName}</span>
+                      {req.sourceType === 'site' && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
+                          <ArrowRightLeft className="w-3 h-3" /> From: {req.sourceSiteName || 'Another Site'}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Requested on {(() => {
+                        if (req.createdAt) { try { const d = new Date(req.createdAt); if (!isNaN(d.getTime())) return format(d, 'dd MMM yyyy, hh:mm a'); } catch (e) { } }
+                        return `${req.date || 'Today'} ${req.time || ''}`.trim();
+                      })()}
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Materials Ordered</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(req.items || []).map((item, i) => (
+                      <div key={i} className="inline-flex items-center gap-1.5 bg-muted/60 border border-border/50 rounded-xl px-2.5 py-1 text-xs font-semibold">
+                        <Package className="w-3 h-3 text-muted-foreground" />
+                        <span>{item.name}</span>
+                        <span className="text-primary font-bold">x {item.quantity} {item.unit || 'Units'}</span>
                       </div>
-                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${statusConfig.badgeClass}`}>
-                        {statusConfig.icon}
-                        {statusConfig.label}
+                    ))}
+                  </div>
+                </div>
+                {req.status === 'pending' && (
+                  <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/15 flex items-center gap-2.5">
+                    <Clock className="w-4 h-4 text-amber-500 shrink-0" />
+                    <p className="text-xs text-muted-foreground">Waiting for Admin to assign a <span className="font-semibold text-foreground">Driver</span>, <span className="font-semibold text-foreground">Supplier</span>, and <span className="font-semibold text-foreground">Vehicle</span>.</p>
+                  </div>
+                )}
+                {req.status === 'assigned' && (
+                  <div className="p-3.5 bg-blue-500/5 rounded-xl border border-blue-500/20 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-blue-500 font-bold text-xs"><Truck className="w-4 h-4" /> Dispatch & Transit Info</div>
+                      {req.startTime && <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-md flex items-center gap-1"><Clock className="w-3 h-3" /> Dispatched at {req.startTime}</span>}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                      <div className="bg-card p-2 rounded-lg border border-border/50"><span className="text-[10px] text-muted-foreground block font-bold uppercase">Driver</span><span className="font-semibold">{req.driverName || 'Assigned'}</span></div>
+                      <div className="bg-card p-2 rounded-lg border border-border/50"><span className="text-[10px] text-muted-foreground block font-bold uppercase">Supplier</span><span className="font-semibold">{req.supplierName || 'Assigned'}</span></div>
+                      <div className="bg-card p-2 rounded-lg border border-border/50">
+                        <span className="text-[10px] text-muted-foreground block font-bold uppercase">Vehicle</span>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {req.vehicleType && <span className="px-1.5 rounded text-[10px] font-bold bg-primary/15 text-primary border border-primary/25">{req.vehicleType}</span>}
+                          <span className="font-semibold">{req.vehicleNumber || req.vehicle || 'Assigned'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {req.status === 'completed' && (
+                  <div className="p-3.5 bg-emerald-500/5 rounded-xl border border-emerald-500/20 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs"><CheckCircle2 className="w-4 h-4" /> Delivered & Received</div>
+                      {(req.duration || (req.startTime && (req.endTime || req.completionTime))) && (
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" /> Duration: {req.duration || calculateDuration(req.startTime, req.endTime || req.completionTime)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      <div className="bg-card p-2 rounded-lg border border-border/50"><span className="text-[10px] text-muted-foreground block font-bold uppercase">Start</span><span className="font-semibold">{req.startTime || '-'}</span></div>
+                      <div className="bg-card p-2 rounded-lg border border-border/50"><span className="text-[10px] text-muted-foreground block font-bold uppercase">End</span><span className="font-semibold">{req.endTime || req.completionTime || '-'}</span></div>
+                      <div className="bg-card p-2 rounded-lg border border-border/50"><span className="text-[10px] text-muted-foreground block font-bold uppercase">Driver</span><span className="font-semibold">{req.driverName || '-'}</span></div>
+                      <div className="bg-card p-2 rounded-lg border border-border/50"><span className="text-[10px] text-muted-foreground block font-bold uppercase">Status</span><span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-3 h-3" /> Received</span></div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="bg-card p-2 rounded-lg border border-border/50"><span className="text-[10px] text-muted-foreground block font-bold uppercase">Supplier</span><span className="font-semibold">{req.supplierName || '-'}</span></div>
+                      <div className="bg-card p-2 rounded-lg border border-border/50">
+                        <span className="text-[10px] text-muted-foreground block font-bold uppercase">Vehicle</span>
+                        <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                          {req.vehicleType && <span className="px-1.5 rounded text-[10px] font-bold bg-primary/15 text-primary border border-primary/25">{req.vehicleType}</span>}
+                          <span className="font-semibold">{req.vehicleNumber || req.vehicle || '-'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {req.completionNotes && <p className="text-xs text-muted-foreground italic pt-1 border-t border-emerald-500/20">Notes: "{req.completionNotes}"</p>}
+                  </div>
+                )}
+                {req.notes && <p className="text-xs text-muted-foreground italic">Staff note: "{req.notes}"</p>}
+              </Card>
+            );
+          };
+
+          return (
+            <div className="space-y-5">
+              {STATUS_GROUPS.map(group => {
+                const groupItems = allFiltered.filter(r => (r.status || 'pending') === group.key);
+                if (groupItems.length === 0) return null;
+                return (
+                  <div key={group.key} className="space-y-3">
+                    <div className={`flex items-center justify-between p-3 rounded-xl border ${group.headerClass}`}>
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg ${group.badgeClass} border`}>{group.icon}</span>
+                        <span className="font-bold text-sm text-foreground">{group.label}</span>
+                      </div>
+                      <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full border ${group.badgeClass}`}>
+                        {groupItems.length} Request{groupItems.length !== 1 ? 's' : ''}
                       </span>
                     </div>
-
-                    {/* Items pills */}
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Materials Ordered</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {req.items.map((item, i) => (
-                          <div key={i} className="inline-flex items-center gap-1.5 bg-muted/60 border border-border/50 rounded-xl px-2.5 py-1 text-xs font-semibold">
-                            <Package className="w-3 h-3 text-muted-foreground" />
-                            <span>{item.name}</span>
-                            <span className="text-primary font-bold">× {item.quantity} {item.unit}</span>
-                          </div>
-                        ))}
-                      </div>
+                    <div className="space-y-3 pl-1">
+                      {groupItems.map(req => renderCard(req))}
                     </div>
-
-                    {/* Status-specific progress / tracking details (Non-monetary) */}
-                    {req.status === 'pending' && (
-                      <div className="p-3 bg-amber-500/5 rounded-xl border border-amber-500/15 flex items-center gap-2.5">
-                        <Clock className="w-4 h-4 text-amber-500 shrink-0" />
-                        <p className="text-xs text-muted-foreground">
-                          Waiting for Admin to review requisition and assign a <span className="font-semibold text-foreground">Driver</span>, <span className="font-semibold text-foreground">Supplier</span>, and <span className="font-semibold text-foreground">Vehicle</span>.
-                        </p>
-                      </div>
-                    )}
-
-                    {req.status === 'assigned' && (
-                      <div className="p-3.5 bg-blue-500/5 rounded-xl border border-blue-500/20 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 text-blue-500 font-bold text-xs">
-                            <Truck className="w-4 h-4" /> Dispatch & Transit Information
-                          </div>
-                          {req.startTime && (
-                            <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-md flex items-center gap-1">
-                              <Clock className="w-3 h-3" /> Dispatched at {req.startTime}
-                            </span>
-                          )}
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs">
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Driver</span>
-                            <span className="font-semibold text-foreground">{req.driverName || 'Assigned'}</span>
-                          </div>
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Supplier / Source</span>
-                            <span className="font-semibold text-foreground">{req.supplierName || 'Assigned'}</span>
-                          </div>
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Vehicle</span>
-                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                              {req.vehicleType && (
-                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-primary/15 text-primary border border-primary/25">
-                                  {req.vehicleType}
-                                </span>
-                              )}
-                              <span className="font-semibold text-foreground">{req.vehicleNumber || req.vehicle || 'Assigned'}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {req.status === 'completed' && (
-                      <div className="p-3.5 bg-emerald-500/5 rounded-xl border border-emerald-500/20 space-y-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs">
-                            <CheckCircle2 className="w-4 h-4" /> Delivery Fulfilled & Received
-                          </div>
-                          {(req.duration || (req.startTime && (req.endTime || req.completionTime))) && (
-                            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 flex items-center gap-1">
-                              <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                              Duration: {req.duration || calculateDuration(req.startTime, req.endTime || req.completionTime)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Start Time</span>
-                            <span className="font-semibold text-foreground">{req.startTime || '-'}</span>
-                          </div>
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">End Time</span>
-                            <span className="font-semibold text-foreground">{req.endTime || req.completionTime || '-'}</span>
-                          </div>
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Driver / Staff</span>
-                            <span className="font-semibold text-foreground">{req.driverName || '-'}</span>
-                          </div>
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Transit Status</span>
-                            <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
-                              <CheckCircle2 className="w-3 h-3" /> Received
-                            </span>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Supplier / Source</span>
-                            <span className="font-semibold text-foreground">{req.supplierName || '-'}</span>
-                          </div>
-                          <div className="bg-card p-2 rounded-lg border border-border/50">
-                            <span className="text-[10px] text-muted-foreground block font-bold uppercase">Vehicle</span>
-                            <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                              {req.vehicleType && (
-                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-primary/15 text-primary border border-primary/25">
-                                  {req.vehicleType}
-                                </span>
-                              )}
-                              <span className="font-semibold text-foreground">{req.vehicleNumber || req.vehicle || '-'}</span>
-                            </div>
-                          </div>
-                        </div>
-                        {req.completionNotes && (
-                          <p className="text-xs text-muted-foreground italic pt-1 border-t border-emerald-500/20">
-                            Completion Notes: "{req.completionNotes}"
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {req.notes && (
-                      <p className="text-xs text-muted-foreground italic">
-                        Staff note: "{req.notes}"
-                      </p>
-                    )}
-                  </Card>
+                  </div>
                 );
               })}
             </div>

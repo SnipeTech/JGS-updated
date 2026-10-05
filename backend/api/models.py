@@ -96,6 +96,7 @@ class ManualExpense(models.Model):
     category = models.CharField(max_length=100, blank=True, default='')
     description = models.TextField(blank=True, default='')
     work_level_stage = models.CharField(max_length=200, blank=True, default='')
+    payment_method = models.CharField(max_length=50, blank=True, default='')
 
 
 class Vendor(models.Model):
@@ -135,10 +136,13 @@ class DailyLog(models.Model):
     transport_cost = models.FloatField(default=0)
     expenses = models.JSONField(default=list, blank=True)
     income_from_client = models.FloatField(default=0)
+    income_payment_method = models.CharField(max_length=50, blank=True, default='')
     notes = models.TextField(blank=True, default='')
     worker_ids = models.JSONField(default=list, blank=True)
     worker_counts = models.JSONField(default=dict, blank=True)
     work_level_stage = models.CharField(max_length=200, blank=True, default='')
+    supervisor_salary = models.FloatField(default=0)
+    employee_salaries = models.JSONField(default=list, blank=True)
 
 
 class Attendance(models.Model):
@@ -153,7 +157,13 @@ class Attendance(models.Model):
     notes = models.TextField(blank=True, default='')
     man_count = models.IntegerField(default=0)
     site_id = models.CharField(max_length=64, blank=True, default='')
+    site_name = models.CharField(max_length=200, blank=True, default='')
+    expense_amount = models.FloatField(default=0)
+    expense_notes = models.TextField(blank=True, default='')
+    expense_payment_method = models.CharField(max_length=50, blank=True, default='')
+    expenses = models.JSONField(default=list, blank=True)
     present_counts = models.JSONField(default=dict, blank=True)
+    half_day_counts = models.JSONField(default=dict, blank=True)
     site_assignments = models.JSONField(default=list, blank=True)
     unnamed_ot_hours = models.FloatField(default=0)
     unnamed_ot_staff_count = models.IntegerField(default=0)
@@ -165,6 +175,7 @@ class Attendance(models.Model):
 class MaterialSetting(models.Model):
     id = models.CharField(max_length=64, primary_key=True, default=generate_str_id)
     name = models.CharField(max_length=150)
+    category = models.CharField(max_length=100, blank=True, default='General')
     unit = models.CharField(max_length=50, blank=True, default='')
     per_unit_weight = models.CharField(max_length=50, blank=True, default='')
     default_rate = models.FloatField(default=0)
@@ -219,11 +230,37 @@ class Vehicle(models.Model):
     name = models.CharField(max_length=150)
     number = models.CharField(max_length=100)
     type = models.CharField(max_length=100, blank=True, default='Other')
+    status = models.CharField(max_length=50, blank=True, default='active')
+    fuel_type = models.CharField(max_length=50, blank=True, default='Diesel')
+    assigned_driver_id = models.CharField(max_length=64, blank=True, default='')
+    assigned_driver_name = models.CharField(max_length=150, blank=True, default='')
+    odometer = models.FloatField(default=0)
+    insurance_expiry = models.CharField(max_length=50, blank=True, default='')
+    fitness_expiry = models.CharField(max_length=50, blank=True, default='')
     notes = models.TextField(blank=True, default='')
     created_at = models.CharField(max_length=50, blank=True, default='')
 
     def __str__(self):
         return f"{self.name} ({self.number})"
+
+
+class VehicleMaintenance(models.Model):
+    id = models.CharField(max_length=64, primary_key=True, default=generate_str_id)
+    vehicle_id = models.CharField(max_length=64, blank=True, default='')
+    vehicle_name = models.CharField(max_length=150, blank=True, default='')
+    vehicle_number = models.CharField(max_length=100, blank=True, default='')
+    date = models.CharField(max_length=50, blank=True, default='')
+    type = models.CharField(max_length=100, blank=True, default='General Service')
+    cost = models.FloatField(default=0)
+    odometer_reading = models.FloatField(default=0)
+    workshop_name = models.CharField(max_length=200, blank=True, default='')
+    bill_number = models.CharField(max_length=100, blank=True, default='')
+    next_service_due_date = models.CharField(max_length=50, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+    created_at = models.CharField(max_length=50, blank=True, default='')
+
+    def __str__(self):
+        return f"{self.vehicle_name} ({self.type}) - {self.date}"
 
 
 class MaterialRequest(models.Model):
@@ -238,6 +275,7 @@ class MaterialRequest(models.Model):
     notes = models.TextField(blank=True, default='')
     status = models.CharField(max_length=50, default='pending')
     work_level_stage = models.CharField(max_length=200, blank=True, default='')
+    created_at = models.CharField(max_length=50, blank=True, default='')
 
     source_type = models.CharField(max_length=50, blank=True, default='')
     source_site_id = models.CharField(max_length=64, blank=True, default='')
@@ -280,6 +318,9 @@ class MaterialRequest(models.Model):
     igst_rate = models.FloatField(default=0)
     cgst_rate = models.FloatField(default=0)
     sgst_rate = models.FloatField(default=0)
+    cgst_amount = models.FloatField(default=0)
+    sgst_amount = models.FloatField(default=0)
+    igst_amount = models.FloatField(default=0)
     gst_amount = models.FloatField(default=0)
 
     completed_at = models.CharField(max_length=50, blank=True, default='')
@@ -327,6 +368,13 @@ class StageCompletionRequest(models.Model):
     requested_by_staff_name = models.CharField(max_length=150, blank=True, default='')
     requested_at = models.CharField(max_length=50, blank=True, default='')
     notes = models.TextField(blank=True, default='')
+
+
+
+
+
+
+    
     status = models.CharField(max_length=50, default='pending')
     admin_note = models.TextField(blank=True, default='')
     reviewed_at = models.CharField(max_length=50, blank=True, default='')

@@ -72,9 +72,9 @@ export function formatTimeString(tStr?: string): string {
   const clean = tStr.trim();
   const match = clean.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/i);
   if (!match) return clean;
-  const h = parseInt(match[1], 10);
+  let h = parseInt(match[1], 10);
   const m = match[2];
-  const mod = (match[3] || 'AM').toUpperCase();
+  const mod = match[3] ? match[3].toUpperCase() : (h >= 12 ? 'PM' : 'AM');
   const formattedH = (h > 12 ? h - 12 : h === 0 ? 12 : h).toString().padStart(2, '0');
   return `${formattedH}:${m} ${mod}`;
 }

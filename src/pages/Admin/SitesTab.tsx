@@ -13,7 +13,7 @@ import {
   Plus, MapPin, Users, TrendingUp, TrendingDown, IndianRupee,
   Building2, CheckCircle2, Clock, Send, Truck, Package,
   CalendarDays, Banknote, ArrowRightLeft, AlertCircle, Layers, UserCircle, Trash2, FileDown,
-  Receipt, FileText, ChevronDown, ChevronUp, RefreshCw
+  Receipt, FileText, ChevronDown, ChevronUp, RefreshCw, PenLine, Wallet
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Material, MaterialRequest, MaterialRental, Site } from '@/types';
@@ -22,6 +22,7 @@ import autoTable from 'jspdf-autotable';
 import { getSiteAvailableStock } from '@/lib/utils';
 import { AssignMaterialModal, CompleteMaterialModal } from './LogisticsModals';
 import { SitePaymentMilestones } from './SitePaymentMilestones';
+import { getLabourTypeMeta } from '../Staff/StaffAttendanceTab';
 
 const statusBadge = (status: string) => {
   const map: Record<string, string> = {
@@ -38,7 +39,7 @@ const statusBadge = (status: string) => {
 // ── Site Detail View ──────────────────────────────────────
 export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () => void }) => {
   const {
-    sites, dailyLogs, updateSite, deleteSite, addDailyLog, currentUser, staffList, attendances,
+    sites, dailyLogs, updateSite, deleteSite, addDailyLog, updateDailyLog, currentUser, staffList, attendances,
     materialRequests, materialSettings, suppliers, vehicles, assignMaterialRequest, completeMaterialRequest, addMaterialRequest, paymentStageMaster,
     materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental,
     stageCompletionRequests, updateStageCompletionRequest,
@@ -59,12 +60,23 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
   const site = sites.find(s => s.id === siteId) || fallbackSite;
   const today = format(new Date(), 'yyyy-MM-dd');
 
+  // Helper to determine if a rental belongs to this site
+  const isRentalForSite = (r: MaterialRental) => {
+    if (!r) return false;
+    if (r.siteId && (r.siteId === siteId || String(r.siteId) === String(siteId) || (site?.id && String(r.siteId) === String(site.id)))) return true;
+    if (r.siteName && site?.name && r.siteName.trim().toLowerCase() === site.name.trim().toLowerCase()) return true;
+    return false;
+  };
+
+  const [siteRentalFilter, setSiteRentalFilter] = useState<'all' | 'active' | 'returned'>('all');
+  const [siteRentalSearch, setSiteRentalSearch] = useState('');
+
   // Rentals for this site
   const siteRentals = useMemo(() => {
     return (materialRentals || [])
-      .filter(r => r.siteId === siteId)
+      .filter(r => isRentalForSite(r))
       .sort((a, b) => new Date(b.startDate + 'T00:00:00').getTime() - new Date(a.startDate + 'T00:00:00').getTime());
-  }, [materialRentals, siteId]);
+  }, [materialRentals, siteId, site?.name, site?.id]);
 
   const activeSiteRentals = useMemo(() => {
     return siteRentals.filter(r => r.status === 'active');
@@ -73,6 +85,21 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
   const returnedSiteRentals = useMemo(() => {
     return siteRentals.filter(r => r.status === 'returned');
   }, [siteRentals]);
+
+  const displayedSiteRentals = useMemo(() => {
+    let list = siteRentals;
+    if (siteRentalFilter === 'active') list = activeSiteRentals;
+    else if (siteRentalFilter === 'returned') list = returnedSiteRentals;
+    if (siteRentalSearch.trim()) {
+      const q = siteRentalSearch.toLowerCase().trim();
+      list = list.filter(r => 
+        (r.materialName || '').toLowerCase().includes(q) ||
+        (r.driverName || '').toLowerCase().includes(q) ||
+        (r.notes || '').toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [siteRentals, activeSiteRentals, returnedSiteRentals, siteRentalFilter, siteRentalSearch]);
 
   // Site Rental Deploy Modal State
   const [showDeployRental, setShowDeployRental] = useState(false);
@@ -146,7 +173,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
   const openReturnRentalModal = (rental: MaterialRental) => {
     setReturnRentalModal({ open: true, rental });
-    setReturnEndDate(today);
+    setReturnEndDate(rental.endDate || today);
     setReturnRatePerDay((rental.rentalRatePerDay || 0).toString());
     setReturnNotes(rental.notes || '');
   };
@@ -340,6 +367,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
   // Work Log Form in Site Details
   const [showAddLog, setShowAddLog] = useState(false);
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [selectedWorkers, setSelectedWorkers] = useState<string[]>([]);
   const [expenseMode, setExpenseMode] = useState('bus');
   const [expenseCustom, setExpenseCustom] = useState('');
@@ -351,7 +379,26 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
   const [matQty, setMatQty] = useState('');
   const [matCost, setMatCost] = useState('');
   const [income, setIncome] = useState('');
+  const [incomePaymentMethod, setIncomePaymentMethod] = useState<'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Card'>('Cash');
   const [logNotes, setLogNotes] = useState('');
+
+  // Check if today's work log already exists for this site
+  const todayLog = useMemo(() => {
+    return dailyLogs.find(l => l.siteId === siteId && l.date === today);
+  }, [dailyLogs, siteId, today]);
+
+  // Pre-populate form with existing log data for editing
+  const startEditLog = (log: typeof todayLog) => {
+    if (!log) return;
+    setEditingLogId(log.id);
+    setSelectedWorkers(log.workerIds || []);
+    setMaterials(log.materials || []);
+    setExpenses(log.expenses || []);
+    setIncome(log.incomeFromClient ? log.incomeFromClient.toString() : '');
+    setIncomePaymentMethod((log.incomePaymentMethod as any) || 'Cash');
+    setLogNotes(log.notes || '');
+    setShowAddLog(true);
+  };
 
   const addExpense = () => {
     const finalName = expenseMode === 'other' ? expenseCustom.trim() : expenseMode;
@@ -400,7 +447,8 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
   const handleAddLog = (e: React.FormEvent) => {
     e.preventDefault();
     if (!site) return;
-    addDailyLog({
+
+    const logData = {
       staffId: currentUser!.id,
       staffName: 'Admin',
       siteId: site.id,
@@ -409,11 +457,19 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       materials,
       expenses,
       incomeFromClient: Number(income) || 0,
+      incomePaymentMethod: Number(income) > 0 ? incomePaymentMethod : undefined,
       notes: logNotes,
       workerIds: selectedWorkers
-    });
-    toast.success('Work log added!');
-    setMaterials([]); setExpenses([]); setIncome(''); setLogNotes(''); setShowAddLog(false);
+    };
+
+    if (editingLogId) {
+      updateDailyLog(editingLogId, logData);
+      toast.success('Work log updated!');
+    } else {
+      addDailyLog(logData);
+      toast.success('Work log added!');
+    }
+    setMaterials([]); setExpenses([]); setIncome(''); setIncomePaymentMethod('Cash'); setLogNotes(''); setShowAddLog(false); setEditingLogId(null);
   };
 
   // Filtered daily logs for this site
@@ -473,6 +529,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     let rangeTotalMaterialsCost = 0;
     let rangeTotalTransportCost = 0;
     let rangeTotalMiscCost = 0;
+    let rangeTotalRentalCost = 0;
     let rangeTotalIncome = 0;
 
     const days = sortedDates.map(date => {
@@ -530,32 +587,47 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
       const namedStaff = Array.from(namedStaffMap.values());
 
-      // Crew counts (painters, plumbers, labourers)
-      let painterCount = 0;
-      let plumberCount = 0;
-      let labourCount = 0;
+      // Crew counts (dynamic labour types from admin settings)
+      const crewTypeCounts: Record<string, number> = {};
 
       logs.forEach(l => {
         if (l.workerCounts) {
-          painterCount += l.workerCounts.painter || 0;
-          plumberCount += l.workerCounts.plumber || 0;
-          labourCount += l.workerCounts.labour || 0;
+          Object.entries(l.workerCounts).forEach(([k, v]) => {
+            if (v && v > 0) {
+              crewTypeCounts[k] = (crewTypeCounts[k] || 0) + v;
+            }
+          });
         }
       });
 
       // Check attendance siteAssignments if logs didn't specify crew counts
       dayAttendances.forEach(a => {
         const assignment = a.siteAssignments?.find(sa => sa.siteId === siteId);
-        if (assignment && assignment.counts) {
-          if (logs.every(l => !l.workerCounts || (l.workerCounts.painter === 0 && l.workerCounts.plumber === 0 && l.workerCounts.labour === 0))) {
-            painterCount += assignment.counts.painter || 0;
-            plumberCount += assignment.counts.plumber || 0;
-            labourCount += assignment.counts.labour || 0;
+        if (assignment) {
+          const logsHaveCrew = logs.some(l => l.workerCounts && Object.values(l.workerCounts).some(v => (v || 0) > 0));
+          if (!logsHaveCrew) {
+            if (assignment.counts) {
+              Object.entries(assignment.counts).forEach(([k, v]) => {
+                if (v && v > 0) {
+                  crewTypeCounts[k] = (crewTypeCounts[k] || 0) + v;
+                }
+              });
+            }
+            if (assignment.halfDayCounts) {
+              Object.entries(assignment.halfDayCounts).forEach(([k, v]) => {
+                if (v && v > 0) {
+                  crewTypeCounts[k] = (crewTypeCounts[k] || 0) + (v * 0.5);
+                }
+              });
+            }
           }
         }
       });
 
-      const totalCrew = painterCount + plumberCount + labourCount;
+      const painterCount = crewTypeCounts.painter || 0;
+      const plumberCount = crewTypeCounts.plumber || 0;
+      const labourCount = crewTypeCounts.labour || 0;
+      const totalCrew = Object.values(crewTypeCounts).reduce((sum, v) => sum + v, 0);
       const totalWorkers = namedStaff.length + totalCrew;
 
       // 2. Costs & Expenses calculation
@@ -585,10 +657,10 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
       // B. Transport
       const logTransportCost = logs.reduce((sum, l) => sum + (l.transportCost || 0), 0);
-      const reqTransportCost = dayRequests.reduce((sum, r) => sum + (r.driverCost || 0) + (r.petrolCharge || 0), 0);
+      const reqTransportCost = dayRequests.reduce((sum, r) => sum + (r.driverCost || 0), 0);
       const dayTransportCost = logTransportCost + reqTransportCost;
 
-      // C. Misc Expenses
+      // C. Misc Expenses (from Daily Logs + Supervisor Attendance Site Expenses)
       const miscExpensesList: { itemName: string; amount: number; staffName?: string }[] = [];
       logs.forEach(l => {
         (l.expenses || []).forEach(e => {
@@ -599,9 +671,57 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
           });
         });
       });
+
+      // Include supervisor attendance daily expenses marked for this site
+      dayAttendances.forEach(a => {
+        if (a.siteId === siteId) {
+          const s = staffList.find(st => st.id === a.staffId);
+          const staffName = s ? s.name : a.staffName || 'Supervisor';
+          if (a.expenseAmount && a.expenseAmount > 0) {
+            miscExpensesList.push({
+              itemName: a.expenseNotes ? `Attendance Expense: ${a.expenseNotes}` : 'Supervisor Attendance Expense',
+              amount: a.expenseAmount,
+              staffName: staffName
+            });
+          }
+          if (a.expenses && Array.isArray(a.expenses)) {
+            a.expenses.forEach(e => {
+              miscExpensesList.push({
+                itemName: e.itemName ? `Attendance: ${e.itemName}` : 'Supervisor Attendance Expense',
+                amount: e.amount || 0,
+                staffName: staffName
+              });
+            });
+          }
+        }
+      });
+
       const dayMiscCost = miscExpensesList.reduce((sum, e) => sum + e.amount, 0);
 
-      const dayTotalExpense = dayMaterialsCost + dayTransportCost + dayMiscCost;
+      // D. Rentals & Equipment deployed to site for this day
+      const dayRentalsList: { name: string; quantity: number; unit: string; rate: number; transit: number; total: number }[] = [];
+      let dayRentalCost = 0;
+      (materialRentals || []).forEach(r => {
+        if (!isRentalForSite(r)) return;
+        const rStart = r.startDate || '';
+        const rEnd = r.endDate || (r.status === 'active' ? format(new Date(), 'yyyy-MM-dd') : rStart);
+        if (rStart && rStart <= date && rEnd >= date) {
+          const dailyRate = (r.quantity || 1) * (r.rentalRatePerDay || 0);
+          const transit = (r.startDate === date) ? (r.transitCost || 0) : 0;
+          const dayTotal = dailyRate + transit;
+          dayRentalCost += dayTotal;
+          dayRentalsList.push({
+            name: r.materialName,
+            quantity: r.quantity || 1,
+            unit: r.unit || 'Nos',
+            rate: r.rentalRatePerDay || 0,
+            transit,
+            total: dayTotal
+          });
+        }
+      });
+
+      const dayTotalExpense = dayMaterialsCost + dayTransportCost + dayMiscCost + dayRentalCost;
 
       // 3. Income
       const logIncome = logs.reduce((sum, l) => sum + (l.incomeFromClient || 0), 0);
@@ -617,6 +737,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       rangeTotalMaterialsCost += dayMaterialsCost;
       rangeTotalTransportCost += dayTransportCost;
       rangeTotalMiscCost += dayMiscCost;
+      rangeTotalRentalCost += dayRentalCost;
       rangeTotalIncome += dayTotalIncome;
 
       return {
@@ -626,6 +747,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         dayRequests,
         dayMilestonePayments,
         namedStaff,
+        crewTypeCounts,
         painterCount,
         plumberCount,
         labourCount,
@@ -638,6 +760,8 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         reqTransportCost,
         dayMiscCost,
         miscExpensesList,
+        dayRentalCost,
+        dayRentalsList,
         dayTotalExpense,
         dayTotalIncome,
         logIncome,
@@ -656,10 +780,11 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       totalMaterialsCost: rangeTotalMaterialsCost,
       totalTransportCost: rangeTotalTransportCost,
       totalMiscCost: rangeTotalMiscCost,
+      totalRentalsCost: rangeTotalRentalCost,
       totalIncome: rangeTotalIncome,
       rangeNetBalance: rangeTotalIncome - rangeTotalExpenses
     };
-  }, [dailyLogs, attendances, materialRequests, site?.paymentStages, siteId, fromDate, toDate, staffList, materialSettings]);
+  }, [dailyLogs, attendances, materialRequests, materialRentals, site?.paymentStages, siteId, fromDate, toDate, staffList, materialSettings]);
 
   // Material requests for this site
   const siteRequests = useMemo(() => {
@@ -717,16 +842,28 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     const logTransportCost = siteLogsAll.reduce((sum, l) => sum + (l.transportCost || 0), 0);
     const reqTransportCost = (materialRequests || [])
       .filter(r => r.siteId === siteId && (r.status === 'completed' || r.status === 'assigned'))
-      .reduce((sum, r) => sum + (r.driverCost || 0) + (r.petrolCharge || 0), 0);
+      .reduce((sum, r) => sum + (r.driverCost || 0), 0);
     const totalTransportExpense = logTransportCost + reqTransportCost;
 
-    const totalMiscExpense = siteLogsAll.reduce(
+    const logMiscExpense = siteLogsAll.reduce(
       (sum, l) => sum + (l.expenses || []).reduce((s, e) => s + (e.amount || 0), 0),
       0
     );
 
+    const attendanceMiscExpense = (attendances || [])
+      .filter(a => a.siteId === siteId && a.status !== 'absent')
+      .reduce((sum, a) => {
+        let amt = a.expenseAmount || 0;
+        if (a.expenses && Array.isArray(a.expenses)) {
+          amt += a.expenses.reduce((s, e) => s + (e.amount || 0), 0);
+        }
+        return sum + amt;
+      }, 0);
+
+    const totalMiscExpense = logMiscExpense + attendanceMiscExpense;
+
     const totalRentalExpense = (materialRentals || [])
-      .filter(r => r.siteId === siteId)
+      .filter(r => isRentalForSite(r))
       .reduce((sum, r) => {
         if (r.totalRentalCost !== undefined && r.status === 'returned') {
           return sum + r.totalRentalCost;
@@ -738,7 +875,85 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         return sum + (days * (r.quantity || 1) * (r.rentalRatePerDay || 0)) + (r.transitCost || 0);
       }, 0);
 
-    const totalSiteExpense = totalMaterialExpense + totalTransportExpense + totalMiscExpense + totalRentalExpense;
+    // 5. Staff & Crew Labour Salary / Wages for this site
+    const supervisor = staffList.find(s => s.id === site?.supervisorId);
+    const defaultSupRate = supervisor?.underLabourSalary || 800;
+
+    let totalLabourExpense = 0;
+
+    // A) From Daily Logs on this site
+    siteLogsAll.forEach(log => {
+      let logLabour = 0;
+      const supSal = Number(log.supervisorSalary) || 0;
+      const empSalaries = (log.employeeSalaries && Array.isArray(log.employeeSalaries)) ? log.employeeSalaries : [];
+      // Strictly verify if supervisor was assigned to this site on that date in Team Attendance
+      const supAttForDate = (attendances || []).find(a => (a.staffId === log.staffId || a.staffId === site?.supervisorId) && a.date === log.date);
+      const isSupAssignedToThisSite = supAttForDate ? supAttForDate.siteId === siteId : (!supAttForDate && site?.supervisorId === log.staffId);
+
+      const empWithoutSup = empSalaries.filter(e => e.role !== 'supervisor').reduce((s, e) => s + (Number(e.totalSalary) || 0), 0);
+      const empSup = isSupAssignedToThisSite ? empSalaries.filter(e => e.role === 'supervisor').reduce((s, e) => s + (Number(e.totalSalary) || 0), 0) : 0;
+      const effectiveSupSal = isSupAssignedToThisSite ? supSal : 0;
+
+      logLabour += Math.max(effectiveSupSal, empSup) + empWithoutSup;
+
+      if (log.workerCounts) {
+        const counts = log.workerCounts;
+        const totalW = Object.values(counts).reduce((s, v) => s + (Number(v) || 0), 0);
+        logLabour += totalW * defaultSupRate;
+      }
+      totalLabourExpense += logLabour;
+    });
+
+    // B) From Attendances assigned to this site
+    (attendances || []).filter(a => (a.siteId === siteId || a.siteAssignments?.some(sa => sa.siteId === siteId)) && a.status !== 'absent').forEach(att => {
+      const staff = staffList.find(s => s.id === att.staffId);
+      if (staff) {
+        // A supervisor's own daily salary only belongs to this site if they were assigned to this site (att.siteId === siteId), NOT just crew siteAssignments
+        const isSupervisorForThisSite = staff.role === 'supervisor' ? att.siteId === siteId : true;
+        if (isSupervisorForThisSite) {
+          const hasLogSupervisorSalary = staff.role === 'supervisor' && siteLogsAll.some(l => 
+            l.date === att.date && (
+              (Number(l.supervisorSalary) || 0) > 0 ||
+              (l.employeeSalaries && Array.isArray(l.employeeSalaries) && l.employeeSalaries.some(e => e.role === 'supervisor' && (Number(e.totalSalary) || 0) > 0))
+            )
+          );
+          if (!hasLogSupervisorSalary) {
+            const dailyBase = staff.salaryType === 'hourly'
+              ? (staff.perHourSalary || 0) * 8
+              : (staff.perDaySalary || (staff.role === 'supervisor' ? 800 : staff.role === 'driver' ? 700 : 650));
+            const otRate = staff.incentivePerHour || (staff.role === 'supervisor' ? 100 : 80);
+            const mult = att.status === 'half-day' ? 0.5 : 1.0;
+            const base = dailyBase * mult;
+            const ot = (att.otHours || 0) * otRate;
+            totalLabourExpense += base + ot;
+          }
+        }
+      }
+
+      // Supervisor crew counts from attendance if not already in daily logs for this date
+      if (att.presentCounts || att.halfDayCounts) {
+        const fullCount = Object.values(att.presentCounts || {}).reduce((s, c) => s + (c || 0), 0);
+        const halfCount = Object.values(att.halfDayCounts || {}).reduce((s, c) => s + (c || 0), 0);
+        const ot = att.unnamedOtHours || 0;
+        const otStaff = att.unnamedOtStaffCount !== undefined ? att.unnamedOtStaffCount : (ot > 0 ? (fullCount + halfCount) : 0);
+        const cRate = staff?.underLabourSalary || defaultSupRate;
+        const cOtRate = staff?.underLabourOT || 100;
+        const cBase = (fullCount * cRate) + (halfCount * (cRate / 2));
+        const cOt = otStaff * ot * cOtRate;
+        const hasLogCounts = siteLogsAll.some(l => l.date === att.date && l.workerCounts && Object.values(l.workerCounts).some(v => (Number(v) || 0) > 0));
+        if (!hasLogCounts) {
+          totalLabourExpense += cBase + cOt;
+        }
+      }
+    });
+
+    // C) Driver transit wages for dispatches to this site
+    const driverWagesForSite = (materialRequests || [])
+      .filter(r => r.siteId === siteId && (r.status === 'completed' || r.status === 'assigned'))
+      .reduce((sum, r) => sum + (Number(r.driverWage) || 0), 0);
+    totalLabourExpense += driverWagesForSite;
+
+    const totalSiteExpense = totalMaterialExpense + totalTransportExpense + totalMiscExpense + totalRentalExpense + totalLabourExpense;
     const netBalance = totalIncomeGiven - totalSiteExpense;
 
     return {
@@ -748,10 +963,11 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       totalTransportExpense,
       totalRentalExpense,
       totalMiscExpense,
+      totalLabourExpense,
       totalSiteExpense,
       netBalance
     };
-  }, [siteLogsAll, materialRequests, materialRentals, siteId, site?.paymentStages]);
+  }, [siteLogsAll, materialRequests, materialRentals, siteId, site?.paymentStages, site?.supervisorId, staffList, attendances]);
 
   const downloadSiteFinancialPDF = () => {
     if (!site) return;
@@ -760,7 +976,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     // Company Header
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 14, 20);
+    doc.text('JGS CONSTRUCTION & INTERIORS', 14, 20);
 
     doc.setFontSize(13);
     doc.setTextColor(40);
@@ -774,32 +990,34 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     // Summary Box
     doc.setDrawColor(220, 220, 220);
     doc.setFillColor(248, 248, 248);
-    doc.roundedRect(14, 44, 182, 38, 2, 2, 'FD');
+    doc.roundedRect(14, 44, 182, 44, 2, 2, 'FD');
 
     const startY = 46;
     doc.setFontSize(9);
     doc.setTextColor(40);
-    doc.text(`Client Income Received: Rs ${siteFinancials.totalIncomeGiven.toLocaleString()} (${siteFinancials.incomeLogs.length} logs)`, 20, startY + 7);
-    doc.text(`Total Site Expenses: Rs ${siteFinancials.totalSiteExpense.toLocaleString()} (All operational costs)`, 20, startY + 13);
-    doc.text(`- Materials: Rs ${siteFinancials.totalMaterialExpense.toLocaleString()}`, 25, startY + 18);
-    doc.text(`- Transport & Driver: Rs ${siteFinancials.totalTransportExpense.toLocaleString()}`, 25, startY + 22);
-    doc.text(`- Rental Products & Scaffolding: Rs ${siteFinancials.totalRentalExpense.toLocaleString()}`, 25, startY + 26);
-    doc.text(`- Incidentals / Tea / Misc: Rs ${siteFinancials.totalMiscExpense.toLocaleString()}`, 25, startY + 30);
+    doc.text(`Client Income Received: Rs ${siteFinancials.totalIncomeGiven.toLocaleString()} (${siteFinancials.incomeLogs.length} logs)`, 20, startY + 6);
+    doc.text(`Total Site Expenses: Rs ${siteFinancials.totalSiteExpense.toLocaleString()} (All operational costs)`, 20, startY + 12);
+    doc.text(`- Materials: Rs ${siteFinancials.totalMaterialExpense.toLocaleString()}`, 25, startY + 17);
+    doc.text(`- Staff Wages & Crew Payroll: Rs ${siteFinancials.totalLabourExpense.toLocaleString()}`, 25, startY + 21);
+    doc.text(`- Transport & Driver: Rs ${siteFinancials.totalTransportExpense.toLocaleString()}`, 25, startY + 25);
+    doc.text(`- Rental Products & Scaffolding: Rs ${siteFinancials.totalRentalExpense.toLocaleString()}`, 25, startY + 29);
+    doc.text(`- Incidentals / Tea / Misc: Rs ${siteFinancials.totalMiscExpense.toLocaleString()}`, 25, startY + 33);
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     if (siteFinancials.netBalance >= 0) {
       doc.setTextColor(6, 95, 70);
-      doc.text(`Net In-Hand Balance: +Rs ${siteFinancials.netBalance.toLocaleString()} (Surplus)`, 20, startY + 36);
+      doc.text(`Net In-Hand Balance: +Rs ${siteFinancials.netBalance.toLocaleString()} (Surplus)`, 20, startY + 40);
     } else {
       doc.setTextColor(153, 27, 27);
-      doc.text(`Net Overspent / Due: -Rs ${Math.abs(siteFinancials.netBalance).toLocaleString()} (Due from Client)`, 20, startY + 36);
+      doc.text(`Net Overspent / Due: -Rs ${Math.abs(siteFinancials.netBalance).toLocaleString()} (Due from Client)`, 20, startY + 40);
     }
 
     // Expense Breakdown Table
     const expHead = [['Category', 'Amount (Rs)', 'Notes']];
     const expBody = [
       ['Materials Expense', siteFinancials.totalMaterialExpense.toLocaleString(), 'Site daily logs + dispatch requisitions'],
+      ['Staff Wages & Crew Payroll', siteFinancials.totalLabourExpense.toLocaleString(), 'Supervisor salary, driver transit & site crew team wages'],
       ['Transport & Vehicle Expense', siteFinancials.totalTransportExpense.toLocaleString(), 'Staff travel + driver transit & petrol'],
       ['Rental Equipment & Products', siteFinancials.totalRentalExpense.toLocaleString(), 'Scaffolding, machines & rental items deployed to site'],
       ['Site Miscellaneous Expenses', siteFinancials.totalMiscExpense.toLocaleString(), 'Food, tea, tools & site incidentals'],
@@ -856,6 +1074,55 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         3: { cellWidth: 62 }
       }
     });
+
+    // Rental Equipment Table in Financial PDF
+    if (siteRentals.length > 0) {
+      const rentalY = (doc as any).lastAutoTable?.finalY ? (doc as any).lastAutoTable.finalY + 12 : 180;
+      doc.setFontSize(12);
+      doc.setTextColor(40);
+      doc.text(`Site Material Rentals & Scaffolding Tracker (${siteRentals.length})`, 14, rentalY);
+
+      const rentHead = [['Material', 'Quantity', 'Start Date', 'End Date', 'Days', 'Rate/Day', 'Total Cost (Rs)', 'Status']];
+      const rentBody = siteRentals.map(r => {
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const startMs = new Date(r.startDate + 'T00:00:00').getTime();
+        const endMs = new Date((r.endDate || todayStr) + 'T00:00:00').getTime();
+        const days = r.totalDays || Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+        const cost = (r.totalRentalCost !== undefined && r.status === 'returned')
+          ? r.totalRentalCost
+          : (days * (r.quantity || 1) * (r.rentalRatePerDay || 0)) + (r.transitCost || 0);
+
+        return [
+          r.materialName,
+          `${r.quantity} ${r.unit}`,
+          r.startDate,
+          r.endDate || 'Active On Site',
+          `${days}d`,
+          `Rs ${r.rentalRatePerDay || 0}`,
+          cost.toLocaleString(),
+          r.status === 'active' ? 'Active On Site' : 'Returned / Settled'
+        ];
+      });
+
+      autoTable(doc, {
+        startY: rentalY + 4,
+        head: rentHead,
+        body: rentBody,
+        theme: 'grid',
+        headStyles: { fillColor: [217, 119, 6], fontSize: 8, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 8 },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 40 },
+          1: { cellWidth: 20 },
+          2: { cellWidth: 24 },
+          3: { cellWidth: 24 },
+          4: { cellWidth: 15 },
+          5: { cellWidth: 20 },
+          6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
+          7: { cellWidth: 25 }
+        }
+      });
+    }
 
     const safeName = site.name.replace(/[^a-zA-Z0-9]/g, '_');
     doc.save(`${safeName}_Financial_Statement.pdf`);
@@ -920,7 +1187,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     // Company Header
     doc.setFontSize(18);
     doc.setTextColor(184, 117, 26);
-    doc.text('JGS INTERIOR & CONSTRUCTION', 14, 20);
+    doc.text('JGS CONSTRUCTION & INTERIORS', 14, 20);
 
     doc.setFontSize(12);
     doc.setTextColor(40);
@@ -951,10 +1218,13 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     const head = [['Date', 'Employees Coming', 'Expenses (Rs)', 'Materials Used', 'Client Income (Rs)', 'Notes / Summary']];
     const body = rangeHistoryData.days.map(d => {
       const staffNames = d.namedStaff.map(s => `${s.name} (${s.role})`).join(', ');
-      const crewParts = [];
-      if (d.painterCount > 0) crewParts.push(`${d.painterCount} Painter`);
-      if (d.plumberCount > 0) crewParts.push(`${d.plumberCount} Plumber`);
-      if (d.labourCount > 0) crewParts.push(`${d.labourCount} Labour`);
+      const crewParts: string[] = [];
+      Object.entries(d.crewTypeCounts || {}).forEach(([typeKey, count]) => {
+        if (count && count > 0) {
+          const meta = getLabourTypeMeta(typeKey);
+          crewParts.push(`${count} ${meta.label}`);
+        }
+      });
       const crewStr = crewParts.length > 0 ? `Crew: ${crewParts.join(', ')}` : '';
       const empStr = `${d.totalWorkers} Total\n${[staffNames, crewStr].filter(Boolean).join('\n')}`;
 
@@ -1042,6 +1312,57 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         </div>
       </div>
 
+      {/* ── UNIQUE LEVEL PAYMENT DUES ALERT IN SITE DETAIL VIEW ── */}
+      {(() => {
+        let totalDue = 0;
+        let overdueCount = 0;
+        const dueLevels: { stageName: string; balance: number; isOverdue: boolean }[] = [];
+
+        (site.paymentStages || []).forEach(stage => {
+          const expected = stage.expectedAmount || 0;
+          const paid = stage.paidAmount || 0;
+          const balance = Math.max(0, expected - paid);
+          if (balance > 0 && expected > 0) {
+            const isOverdue = !!(stage.dueDate && new Date(stage.dueDate) < new Date());
+            if (isOverdue) overdueCount++;
+            if (stage.completionStatus === 'completed' || isOverdue) {
+              totalDue += balance;
+              dueLevels.push({ stageName: stage.stageName, balance, isOverdue });
+            }
+          }
+        });
+
+        if (dueLevels.length === 0) return null;
+
+        return (
+          <div className="p-4 rounded-3xl bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-card border border-amber-500/40 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-slide-up">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0 font-bold">
+                <Wallet className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-sm text-foreground">
+                    Level Payments Under Due: <strong className="text-amber-600 dark:text-amber-400 font-extrabold font-mono text-base">₹{totalDue.toLocaleString()}</strong>
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                    {dueLevels.length} Level{dueLevels.length > 1 ? 's' : ''} Awaiting Collection
+                  </span>
+                  {overdueCount > 0 && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-destructive/15 text-destructive border border-destructive/30 animate-pulse">
+                      {overdueCount} Overdue
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Client balance pending: {dueLevels.map(l => `${l.stageName} (₹${l.balance.toLocaleString()})`).join(' • ')}
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <SitePaymentMilestones
         site={site}
         updateSite={updateSite}
@@ -1105,7 +1426,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
               ₹{siteFinancials.totalSiteExpense.toLocaleString()}
             </div>
             <p className="text-[11px] text-muted-foreground">
-              Materials + Transport + Rentals + Incidentals
+              Materials + Wages + Transport + Rentals + Incidentals
             </p>
           </div>
 
@@ -1128,10 +1449,16 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         </div>
 
         {/* Expense Category Breakdown Pills */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-border/30 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-border/30 text-xs">
           <div className="flex justify-between items-center p-2 rounded-lg bg-muted/40 border border-border/40">
             <span className="text-muted-foreground">🧱 Materials:</span>
             <strong className="text-foreground font-mono">₹{siteFinancials.totalMaterialExpense.toLocaleString()}</strong>
+          </div>
+          <div className="flex justify-between items-center p-2 rounded-lg bg-purple-500/10 border border-purple-500/20">
+            <span className="text-purple-800 dark:text-purple-300 font-semibold flex items-center gap-1">
+              <Users className="w-3 h-3 text-purple-600" /> Wages:
+            </span>
+            <strong className="text-purple-700 dark:text-purple-400 font-mono">₹{siteFinancials.totalLabourExpense.toLocaleString()}</strong>
           </div>
           <div className="flex justify-between items-center p-2 rounded-lg bg-muted/40 border border-border/40">
             <span className="text-muted-foreground">🚚 Transport:</span>
@@ -1291,6 +1618,16 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                             <CheckCircle2 className="w-3 h-3 mr-1" /> Complete Delivery
                           </Button>
                         )}
+                        {isCompleted && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setCompleteModal({ open: true, request: req })}
+                            className="h-7 px-2.5 rounded-lg border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 font-bold text-[11px] shadow-xs"
+                          >
+                            <PenLine className="w-3 h-3 mr-1" /> Edit Rates & GST
+                          </Button>
+                        )}
                       </div>
                     </div>
 
@@ -1303,7 +1640,18 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                         >
                           <Package className="w-3 h-3 text-primary" />
                           {it.name}: <strong className="text-primary font-mono">{it.quantity} {it.unit}</strong>
-                          {it.rate ? <span className="text-muted-foreground text-[10px]">(₹{it.rate}/{it.unit})</span> : null}
+                          {it.rate ? <span className="text-muted-foreground text-[10px]">(₹{it.supplierRate ?? it.rate}/{it.unit})</span> : null}
+                          {(it.gstAmount || 0) > 0 && (
+                            it.gstType === 'cgst_sgst' ? (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-500/10 text-blue-700 dark:text-blue-400 font-bold border border-blue-500/20">
+                                CGST {it.cgstRate}% + SGST {it.sgstRate}%
+                              </span>
+                            ) : (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-primary/10 text-primary font-bold border border-primary/20">
+                                +{it.gstRate}% GST
+                              </span>
+                            )
+                          )}
                         </span>
                       ))}
                     </div>
@@ -1375,20 +1723,21 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       </div>
 
       {/* ── SITE RENTAL PRODUCTS & EQUIPMENT TRACKER ── */}
-      <div className="bg-card p-4 rounded-2xl border border-border/70 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-border/50">
+      <div className="bg-card p-4 sm:p-5 rounded-2xl border border-amber-500/30 shadow-xs space-y-4">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border/40">
           <div>
             <div className="flex items-center gap-2">
               <RefreshCw className="w-4 h-4 text-amber-600" />
-              <h4 className="text-sm font-heading font-black text-foreground uppercase tracking-wide">
-                Rental Products & Equipment on Site
+              <h4 className="text-sm font-heading font-extrabold text-foreground uppercase tracking-wide">
+                Site Material Rentals & Scaffolding Tracker
               </h4>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/25">
                 {activeSiteRentals.length} Active
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Scaffolding, machinery, and daily rental tools deployed to this site.
+              Deploy rental materials to this site, assign transit drivers, track daily duration, and calculate closing rental costs.
             </p>
           </div>
 
@@ -1405,140 +1754,250 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
             }}
             className="h-8 rounded-xl text-xs font-bold gap-1.5 text-white shadow-xs self-start sm:self-auto bg-amber-600 hover:bg-amber-700"
           >
-            <Plus className="w-3.5 h-3.5" /> Deploy Rental to Site
+            <Plus className="w-3.5 h-3.5" /> Deploy Material to Site
           </Button>
         </div>
 
-        {/* Quick Summary Pill Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-muted/40 rounded-xl border border-border/40 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-muted-foreground">Active Deployments:</span>
-            <strong className="text-foreground font-mono">{activeSiteRentals.length} items</strong>
-            <span className="text-muted-foreground">•</span>
-            <span className="font-semibold text-muted-foreground">Past / Settled:</span>
-            <strong className="text-foreground font-mono">{returnedSiteRentals.length} records</strong>
+        {/* Filter Pills + Search Bar + Quick KPI Summary */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 bg-muted/40 rounded-xl border border-border/40 text-xs">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] font-bold text-muted-foreground mr-1">Status:</span>
+            <button
+              type="button"
+              onClick={() => setSiteRentalFilter('all')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                siteRentalFilter === 'all'
+                  ? 'bg-amber-600 text-white shadow-2xs'
+                  : 'bg-card text-muted-foreground hover:text-foreground border border-border/50'
+              }`}
+            >
+              All ({siteRentals.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSiteRentalFilter('active')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                siteRentalFilter === 'active'
+                  ? 'bg-amber-600 text-white shadow-2xs'
+                  : 'bg-card text-muted-foreground hover:text-foreground border border-border/50'
+              }`}
+            >
+              Active On Site ({activeSiteRentals.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSiteRentalFilter('returned')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                siteRentalFilter === 'returned'
+                  ? 'bg-amber-600 text-white shadow-2xs'
+                  : 'bg-card text-muted-foreground hover:text-foreground border border-border/50'
+              }`}
+            >
+              Returned / Settled ({returnedSiteRentals.length})
+            </button>
           </div>
 
-          <div className="text-xs font-bold text-foreground">
-            Total Site Rental Cost: <span className="font-mono text-amber-600 dark:text-amber-400">₹{siteFinancials.totalRentalExpense.toLocaleString()}</span>
+          <div className="flex items-center gap-3 self-end md:self-auto">
+            <div className="relative w-48 sm:w-56">
+              <Input
+                value={siteRentalSearch}
+                onChange={e => setSiteRentalSearch(e.target.value)}
+                placeholder="Search rentals by name or note..."
+                className="h-8 text-xs rounded-lg pr-6"
+              />
+              {siteRentalSearch && (
+                <button
+                  type="button"
+                  onClick={() => setSiteRentalSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
+            <div className="text-right shrink-0">
+              <span className="text-[10px] text-muted-foreground block font-semibold uppercase">Total Rental Cost:</span>
+              <span className="font-mono text-sm font-extrabold text-amber-600 dark:text-amber-400">
+                ₹{siteFinancials.totalRentalExpense.toLocaleString()}
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Active Rentals List */}
-        {activeSiteRentals.length === 0 ? (
-          <div className="p-4 rounded-xl bg-muted/20 border border-border/40 text-center text-xs text-muted-foreground space-y-1">
-            <p className="font-semibold text-foreground">No active rental materials currently on this site</p>
-            <p className="text-[11px]">Click "Deploy Rental to Site" to dispatch scaffolding, generators, or machines.</p>
+        {/* Formula Hint */}
+        <div className="flex items-center justify-between text-[11px] text-muted-foreground px-1">
+          <span>Formula: (Days on site) × (Qty) × (Rate/day per product) + Transit Cost</span>
+          <span className="font-mono font-medium">Site: {site.name}</span>
+        </div>
+
+        {/* Rental Cards List */}
+        {displayedSiteRentals.length === 0 ? (
+          <div className="text-center py-10 bg-muted/20 rounded-2xl border border-dashed border-border/60">
+            <RefreshCw className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-foreground">
+              {siteRentalSearch ? `No rental items matching "${siteRentalSearch}"` : 'No rental records for this site'}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+              {siteRentalSearch ? 'Try another search term or change the status filter.' : 'Scaffolding, machinery, and equipment deployed to this site will show here with full rate & duration tracking.'}
+            </p>
+            <Button
+              size="sm"
+              onClick={() => {
+                setRentalMatId('');
+                setRentalMatName('');
+                setRentalQuantity('1');
+                setRentalRatePerDay('');
+                setRentalStartDate(today);
+                setRentalRequiresDriver(false);
+                setShowDeployRental(true);
+              }}
+              className="mt-3 h-8 text-xs font-bold gap-1 bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" /> Deploy Material to Site
+            </Button>
           </div>
         ) : (
-          <div className="space-y-3">
-            {activeSiteRentals.map(rental => {
+          <div className="space-y-3.5">
+            {displayedSiteRentals.map(rental => {
+              const todayStr = format(new Date(), 'yyyy-MM-dd');
               const startMs = new Date(rental.startDate + 'T00:00:00').getTime();
-              const endMs = new Date(today + 'T00:00:00').getTime();
-              const daysActive = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
-              const runningRent = (daysActive * rental.quantity * (rental.rentalRatePerDay || 0)) + (rental.transitCost || 0);
+              const currentEnd = rental.endDate || todayStr;
+              const currentEndMs = new Date(currentEnd + 'T00:00:00').getTime();
+              const daysActive = Math.max(1, Math.floor((currentEndMs - startMs) / 86400000) + 1);
+              const isActive = rental.status === 'active';
+              const calculatedRent = (rental.totalRentalCost !== undefined && !isActive)
+                ? rental.totalRentalCost
+                : (daysActive * rental.quantity * (rental.rentalRatePerDay || 0)) + (rental.transitCost || 0);
 
               return (
-                <div
+                <Card
                   key={rental.id}
-                  className="p-3.5 rounded-2xl bg-card border border-amber-500/30 shadow-2xs space-y-2.5 transition-all hover:border-amber-500/50"
+                  className={`p-4 rounded-2xl bg-card border shadow-xs space-y-3 transition-all ${
+                    isActive ? 'border-amber-500/40 hover:border-amber-500/60 shadow-2xs' : 'border-border/60 opacity-95'
+                  }`}
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border/40 pb-2">
+                  {/* Card Header */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-border/40">
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-heading font-bold text-sm text-foreground">{rental.materialName}</span>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-400 uppercase tracking-wide">
-                          Active On Site
-                        </span>
-                        <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-heading font-bold text-base text-foreground">
+                          {rental.materialName}
+                        </h4>
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25 font-mono">
                           {rental.quantity} {rental.unit}
                         </span>
+                        {isActive ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/15 text-emerald-600 border border-emerald-500/25 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            Active On Site ({daysActive} Days)
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-muted text-muted-foreground border border-border/50 flex items-center gap-1 font-semibold">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            Returned ({rental.totalDays || daysActive} Days Total)
+                          </span>
+                        )}
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground mt-1">
-                        <span>📅 Deployed: <strong className="text-foreground font-mono">{rental.startDate}</strong></span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 flex-wrap">
+                        <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
+                        <span className="font-semibold text-foreground">{rental.siteName || site.name}</span>
                         <span>•</span>
-                        <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-300 font-semibold">
-                          ⏱️ {daysActive} {daysActive === 1 ? 'day' : 'days'} on site
-                        </span>
-                        <span>•</span>
-                        <span>Daily Rate: <strong className="text-foreground font-mono">₹{rental.rentalRatePerDay || 0}</strong> / day per {rental.unit}</span>
+                        <span>Start Date: <strong>{format(new Date(rental.startDate + 'T00:00:00'), 'dd MMM yyyy')}</strong></span>
+                        {rental.endDate && (
+                          <>
+                            <span>•</span>
+                            <span>End Date: <strong>{format(new Date(rental.endDate + 'T00:00:00'), 'dd MMM yyyy')}</strong></span>
+                          </>
+                        )}
                       </div>
                     </div>
 
-                    <div className="text-right">
-                      <span className="text-[10px] text-muted-foreground block">Running Total:</span>
-                      <span className="font-heading font-extrabold text-sm text-amber-600 dark:text-amber-400 font-mono">
-                        ₹{runningRent.toLocaleString()}
+                    {/* Right Amount Badge & Actions */}
+                    <div className="flex items-center gap-2 sm:self-center flex-wrap justify-end">
+                      <div className="text-right mr-1">
+                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">
+                          {isActive ? 'Accrued Rent to Date' : 'Final Total Rental Cost'}
+                        </span>
+                        <span className={`font-heading font-black text-lg ${isActive ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
+                          ₹{calculatedRent.toLocaleString()}
+                        </span>
+                      </div>
+
+                      {isActive ? (
+                        <Button
+                          size="sm"
+                          onClick={() => openReturnRentalModal(rental)}
+                          className="h-9 px-3 rounded-xl text-xs font-bold gap-1 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Return & Settle
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openReturnRentalModal(rental)}
+                          className="h-9 px-3 rounded-xl text-xs font-semibold gap-1"
+                        >
+                          <PenLine className="w-3.5 h-3.5" /> Adjust Calculation
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          if (confirm(`Delete rental record for "${rental.materialName}"?`)) {
+                            deleteMaterialRental(rental.id);
+                            toast.success('Rental record deleted');
+                          }
+                        }}
+                        className="h-8 w-8 text-destructive hover:bg-destructive/10 rounded-lg"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Calculation Details Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-2.5 rounded-xl bg-muted/20 text-xs">
+                    <div>
+                      <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Rate per Unit/Day:</span>
+                      <span className="font-bold text-foreground">₹{rental.rentalRatePerDay || 0} / day</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Duration on Site:</span>
+                      <span className="font-bold text-foreground">
+                        {isActive ? `${daysActive} Days (Running)` : `${rental.totalDays || daysActive} Days Total`}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Driver & Transit:</span>
+                      {rental.requiresDriver ? (
+                        <span className="font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                          <Truck className="w-3 h-3" />
+                          {rental.driverName || 'Assigned Driver'} {rental.transitCost ? `(₹${rental.transitCost.toLocaleString()})` : ''}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">Not Required</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-muted-foreground block uppercase font-semibold">Material Rent Subtotal:</span>
+                      <span className="font-bold font-mono text-foreground">
+                        {isActive ? daysActive : (rental.totalDays || daysActive)}d × {rental.quantity} × ₹{rental.rentalRatePerDay || 0} = ₹{((isActive ? daysActive : (rental.totalDays || daysActive)) * rental.quantity * (rental.rentalRatePerDay || 0)).toLocaleString()}
                       </span>
                     </div>
                   </div>
 
-                  {rental.requiresDriver && (
-                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground bg-muted/30 p-2 rounded-xl border border-border/40">
-                      <span className="flex items-center gap-1">
-                        <Truck className="w-3.5 h-3.5 text-blue-500" /> Driver: <strong className="text-foreground">{rental.driverName || 'Assigned'}</strong>
-                      </span>
-                      {rental.vehicleNumber && (
-                        <span>Vehicle: <strong className="text-foreground">{rental.vehicleNumber}</strong></span>
-                      )}
-                      {rental.transitCost ? (
-                        <span>Transit Allowance: <strong className="text-foreground font-mono">₹{rental.transitCost.toLocaleString()}</strong></span>
-                      ) : null}
-                    </div>
-                  )}
-
+                  {/* Notes / Comments */}
                   {rental.notes && (
-                    <p className="text-[11px] text-muted-foreground italic bg-muted/40 px-2.5 py-1 rounded-lg">
+                    <p className="text-[11px] text-muted-foreground italic bg-muted/40 px-3 py-1.5 rounded-xl border border-border/30">
                       "{rental.notes}"
                     </p>
                   )}
-
-                  <div className="flex justify-end pt-1">
-                    <Button
-                      size="sm"
-                      onClick={() => openReturnRentalModal(rental)}
-                      className="h-8 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-2xs gap-1.5"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Mark Returned & Settle Rental
-                    </Button>
-                  </div>
-                </div>
+                </Card>
               );
             })}
-          </div>
-        )}
-
-        {/* Returned / Settled Rentals History */}
-        {returnedSiteRentals.length > 0 && (
-          <div className="space-y-2 pt-2 border-t border-border/40">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Settled / Returned Rentals History ({returnedSiteRentals.length})
-            </span>
-
-            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-              {returnedSiteRentals.map(r => (
-                <div key={r.id} className="p-3 rounded-xl bg-muted/20 border border-border/50 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div>
-                    <span className="font-bold text-foreground mr-2">{r.materialName}</span>
-                    <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md bg-muted text-muted-foreground">
-                      {r.quantity} {r.unit}
-                    </span>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      Duration: {r.startDate} to {r.endDate} ({r.totalDays || 1} {r.totalDays === 1 ? 'day' : 'days'}) @ ₹{r.rentalRatePerDay}/day
-                      {r.transitCost ? ` + ₹${r.transitCost} transit` : ''}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <span className="font-bold text-xs text-foreground font-mono block">
-                      ₹{(r.totalRentalCost || 0).toLocaleString()}
-                    </span>
-                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                      Settled
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
         )}
       </div>
@@ -1546,27 +2005,77 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       {/* Add Work Entry Toggle */}
       <div className="animate-slide-up">
         {!showAddLog ? (
-          <Button
-            onClick={() => {
-              setSelectedWorkers(site.assignedStaffIds || []);
-              setShowAddLog(true);
-            }}
-            className="w-full h-11 rounded-xl text-white font-semibold flex items-center justify-center gap-2 shadow-sm"
-            style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
-          >
-            <Plus className="w-4 h-4" /> Add Daily Work Entry
-          </Button>
+          todayLog ? (
+            /* ── Today's Entry Exists: Show Summary + Edit ── */
+            <Card className="p-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                  <div>
+                    <p className="text-sm font-bold text-foreground">Today's Work Entry Submitted</p>
+                    <p className="text-[11px] text-muted-foreground">{today} · {site.name}</p>
+                  </div>
+                </div>
+                <Button
+                  onClick={() => startEditLog(todayLog)}
+                  variant="outline"
+                  className="h-9 px-4 rounded-xl text-xs font-bold border-primary/40 text-primary hover:bg-primary/10 flex items-center gap-1.5"
+                >
+                  <PenLine className="w-3.5 h-3.5" /> Edit Entry
+                </Button>
+              </div>
+
+              {/* Summary of today's log */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="p-2 rounded-lg bg-card border border-border/40">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold">Workers</span>
+                  <p className="font-bold text-foreground">{todayLog.workerIds?.length || 0}</p>
+                </div>
+                <div className="p-2 rounded-lg bg-card border border-border/40">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold">Materials</span>
+                  <p className="font-bold text-foreground">{todayLog.materials?.length || 0} items</p>
+                </div>
+                <div className="p-2 rounded-lg bg-card border border-border/40">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold">Expenses</span>
+                  <p className="font-bold text-foreground">₹{(todayLog.expenses || []).reduce((s, e) => s + e.amount, 0).toLocaleString()}</p>
+                </div>
+                <div className="p-2 rounded-lg bg-card border border-border/40">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold">Income</span>
+                  <p className="font-bold text-foreground">₹{(todayLog.incomeFromClient || 0).toLocaleString()}</p>
+                </div>
+              </div>
+
+              {todayLog.notes && (
+                <p className="text-xs text-muted-foreground border-t border-border/30 pt-2">
+                  <strong className="text-foreground">Notes:</strong> {todayLog.notes}
+                </p>
+              )}
+            </Card>
+          ) : (
+            /* ── No Entry Today: Show Add Button ── */
+            <Button
+              onClick={() => {
+                setEditingLogId(null);
+                setSelectedWorkers(site.assignedStaffIds || []);
+                setShowAddLog(true);
+              }}
+              className="w-full h-11 rounded-xl text-white font-semibold flex items-center justify-center gap-2 shadow-sm"
+              style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
+            >
+              <Plus className="w-4 h-4" /> Add Daily Work Entry
+            </Button>
+          )
         ) : (
           <div className="form-card mb-4 space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border/50">
               <p className="font-heading font-bold text-sm flex items-center gap-2 m-0">
-                <Send className="w-4 h-4 text-primary" /> Daily Work Entry
+                <Send className="w-4 h-4 text-primary" /> {editingLogId ? 'Edit Work Entry' : 'Daily Work Entry'}
               </p>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                onClick={() => setShowAddLog(false)}
+                onClick={() => { setShowAddLog(false); setEditingLogId(null); }}
                 className="w-7 h-7 rounded-full"
               >
                 ✕
@@ -1743,13 +2252,27 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                 <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
                   <IndianRupee className="w-3.5 h-3.5" /> Income from Client
                 </Label>
-                <Input
-                  type="number"
-                  placeholder="₹ 0"
-                  value={income}
-                  onChange={e => setIncome(e.target.value)}
-                  className="mt-1 h-10 rounded-xl text-xs font-semibold"
-                />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                  <Input
+                    type="number"
+                    placeholder="₹ 0"
+                    value={income}
+                    onChange={e => setIncome(e.target.value)}
+                    className="h-10 rounded-xl text-xs font-semibold"
+                  />
+                  <Select value={incomePaymentMethod} onValueChange={(v: any) => setIncomePaymentMethod(v)}>
+                    <SelectTrigger className="h-10 rounded-xl text-xs bg-card">
+                      <SelectValue placeholder="Mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Cash">💵 Cash</SelectItem>
+                      <SelectItem value="UPI">📱 UPI / GPay / PhonePe</SelectItem>
+                      <SelectItem value="Bank Transfer">🏦 Bank Transfer</SelectItem>
+                      <SelectItem value="Cheque">📝 Cheque</SelectItem>
+                      <SelectItem value="Card">💳 Card</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               {/* Notes */}
@@ -1768,7 +2291,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                 className="w-full h-11 rounded-xl text-white font-semibold text-xs shadow-sm"
                 style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
               >
-                Submit Work Log
+                {editingLogId ? 'Update Work Log' : 'Submit Work Log'}
               </Button>
             </form>
           </div>
@@ -1999,21 +2522,15 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                 {day.totalCrew > 0 && (
                   <div className="flex flex-wrap gap-1.5 items-center pt-1 border-t border-border/30">
                     <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mr-1">Crew:</span>
-                    {day.painterCount > 0 && (
-                      <span className="bg-amber-500/10 text-amber-800 dark:text-amber-200 border border-amber-500/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
-                        🎨 {day.painterCount} {day.painterCount === 1 ? 'Painter' : 'Painters'}
-                      </span>
-                    )}
-                    {day.plumberCount > 0 && (
-                      <span className="bg-sky-500/10 text-sky-800 dark:text-sky-200 border border-sky-500/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
-                        🔧 {day.plumberCount} {day.plumberCount === 1 ? 'Plumber' : 'Plumbers'}
-                      </span>
-                    )}
-                    {day.labourCount > 0 && (
-                      <span className="bg-orange-500/10 text-orange-800 dark:text-orange-200 border border-orange-500/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
-                        🔨 {day.labourCount} {day.labourCount === 1 ? 'Labourer' : 'Labourers'}
-                      </span>
-                    )}
+                    {Object.entries(day.crewTypeCounts || {}).map(([typeKey, count]) => {
+                      if (!count || count <= 0) return null;
+                      const meta = getLabourTypeMeta(typeKey);
+                      return (
+                        <span key={typeKey} className="bg-amber-500/10 text-amber-800 dark:text-amber-200 border border-amber-500/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
+                          {meta.icon} {count} {meta.label}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -2029,16 +2546,22 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                     <TrendingDown className="w-3.5 h-3.5 text-destructive" />
                     Daily Costs & Expenses (₹{day.dayTotalExpense.toLocaleString()} Total)
                   </span>
-                  <div className="flex items-center gap-2 text-[10px] font-semibold text-muted-foreground">
+                  <div className="flex items-center gap-2 text-[10px] font-semibold text-muted-foreground flex-wrap">
                     <span>Materials: ₹{day.dayMaterialsCost.toLocaleString()}</span>
                     <span>•</span>
                     <span>Transport: ₹{day.dayTransportCost.toLocaleString()}</span>
+                    {day.dayRentalCost > 0 && (
+                      <>
+                        <span>•</span>
+                        <span className="text-amber-700 dark:text-amber-400 font-bold">Rentals: ₹{day.dayRentalCost.toLocaleString()}</span>
+                      </>
+                    )}
                     <span>•</span>
                     <span>Misc: ₹{day.dayMiscCost.toLocaleString()}</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                   {/* Column A: Materials Used */}
                   <div className="p-2 rounded-lg bg-card border border-border/50 text-xs space-y-1">
                     <span className="text-[10px] font-bold text-muted-foreground uppercase flex items-center justify-between">
@@ -2087,7 +2610,29 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                     )}
                   </div>
 
-                  {/* Column C: Miscellaneous Incidentals */}
+                  {/* Column C: Rental Materials & Machinery */}
+                  <div className="p-2 rounded-lg bg-amber-500/[0.05] border border-amber-500/25 text-xs space-y-1">
+                    <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 uppercase flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        <RefreshCw className="w-3 h-3 text-amber-600" /> Rentals on Site
+                      </span>
+                      <span className="font-semibold font-mono text-amber-700 dark:text-amber-400">₹{day.dayRentalCost.toLocaleString()}</span>
+                    </span>
+                    {day.dayRentalsList.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground italic">No rentals active today</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {day.dayRentalsList.map((r, rIdx) => (
+                          <div key={rIdx} className="flex items-center justify-between text-[11px]">
+                            <span className="truncate text-foreground font-medium">{r.name} ({r.quantity} {r.unit})</span>
+                            <span className="font-semibold font-mono text-amber-700 dark:text-amber-400 shrink-0">₹{r.total.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Column D: Miscellaneous Incidentals */}
                   <div className="p-2 rounded-lg bg-card border border-border/50 text-xs space-y-1">
                     <span className="text-[10px] font-bold text-muted-foreground uppercase flex items-center justify-between">
                       <span>Site Misc Expenses</span>
@@ -2130,7 +2675,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                         </div>
                         <div className="text-right">
                           <span className="font-bold text-destructive">
-                            ₹{( (r.materialCost || r.supplierPrice || 0) + (r.driverCost || 0) + (r.petrolCharge || 0) ).toLocaleString()}
+                            ₹{((r.materialCost || r.supplierPrice || 0) + (r.driverCost || 0)).toLocaleString()}
                           </span>
                           <span className="text-[10px] block text-emerald-600 font-semibold capitalize">{r.status}</span>
                         </div>
@@ -2338,7 +2883,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                       <SelectContent>
                         {materialSettings.map(m => (
                           <SelectItem key={m.id} value={m.name}>
-                            {m.name} ({m.unit})
+                            {m.name} · [{m.category || 'General'}] ({m.unit})
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -2484,9 +3029,9 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                       <SelectValue placeholder="Select from Rental Material Catalog" />
                     </SelectTrigger>
                     <SelectContent>
-                      {materialSettings.map(m => (
+                      {materialSettings.filter(m => m.isRental).map(m => (
                         <SelectItem key={m.id} value={m.id}>
-                          {m.name} {m.isRental ? '★ Rental' : ''} {m.rentalRatePerDay ? `(₹${m.rentalRatePerDay}/day)` : ''}
+                          {m.name} {m.rentalRatePerDay ? `(₹${m.rentalRatePerDay}/day)` : ''}
                         </SelectItem>
                       ))}
                       <SelectItem value="custom">+ Custom / Enter Name Manually</SelectItem>
@@ -2853,6 +3398,8 @@ export const SitesTab = () => {
   const [show, setShow] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('new');
+  const [siteFilter, setSiteFilter] = useState<'all' | 'due' | 'active' | 'completed'>('all');
+  const [siteSearch, setSiteSearch] = useState('');
 
   if (selectedSiteId) {
     return <SiteDetailView siteId={selectedSiteId} onBack={() => setSelectedSiteId(null)} />;
@@ -3059,7 +3606,7 @@ export const SitesTab = () => {
         </div>
       )}
 
-      {/* Sites Grid */}
+      {/* Sites Grid with Unique Under-Due Highlighting */}
       {(() => {
         const siteIds = new Set(sites.map(s => s.id));
         const allSites = [...sites];
@@ -3081,75 +3628,301 @@ export const SitesTab = () => {
           }
         });
 
+        // Helper to check if any level is under due
+        const getSiteDueInfo = (s: typeof allSites[0]) => {
+          let totalDue = 0;
+          let overdueCount = 0;
+          const dueLevels: { stageName: string; balance: number; isOverdue: boolean }[] = [];
+
+          (s.paymentStages || []).forEach(stage => {
+            const expected = stage.expectedAmount || 0;
+            const paid = stage.paidAmount || 0;
+            const balance = Math.max(0, expected - paid);
+            if (balance > 0 && expected > 0) {
+              const isOverdue = !!(stage.dueDate && new Date(stage.dueDate) < new Date());
+              if (isOverdue) overdueCount++;
+              if (stage.completionStatus === 'completed' || isOverdue) {
+                totalDue += balance;
+                dueLevels.push({ stageName: stage.stageName, balance, isOverdue });
+              }
+            }
+          });
+
+          return {
+            totalDue,
+            overdueCount,
+            dueLevels,
+            hasDue: dueLevels.length > 0,
+            hasOverdue: overdueCount > 0
+          };
+        };
+
+        const sitesWithDue = allSites.filter(s => getSiteDueInfo(s).hasDue);
+        const grandTotalDue = sitesWithDue.reduce((sum, s) => sum + getSiteDueInfo(s).totalDue, 0);
+
+        // Filter and search
+        const filteredSites = allSites.filter(s => {
+          if (siteFilter === 'due' && !getSiteDueInfo(s).hasDue) return false;
+          if (siteFilter === 'active' && s.status !== 'active') return false;
+          if (siteFilter === 'completed' && s.status !== 'completed') return false;
+          if (siteSearch.trim()) {
+            const q = siteSearch.toLowerCase().trim();
+            const matchName = s.name.toLowerCase().includes(q);
+            const matchClient = (s.clientName || '').toLowerCase().includes(q);
+            const matchAddr = (s.address || '').toLowerCase().includes(q);
+            return matchName || matchClient || matchAddr;
+          }
+          return true;
+        });
+
         return (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {allSites.map(s => (
-          <Card
-            key={s.id}
-            onClick={() => setSelectedSiteId(s.id)}
-            className="p-5 rounded-3xl bg-card border border-border/60 hover:border-primary/50 shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300 cursor-pointer space-y-3.5 group"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
-                  <Building2 className="w-5 h-5" />
-                </div>
-                <div className="min-w-0">
-                  <h4 className="font-heading font-bold text-base text-foreground truncate">{s.name}</h4>
-                  <p className="text-xs text-muted-foreground truncate">{s.clientName}</p>
-                </div>
+          <div className="space-y-4">
+            {/* Filter and Search Bar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  onClick={() => setSiteFilter('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    siteFilter === 'all'
+                      ? 'bg-foreground text-background shadow-xs'
+                      : 'bg-muted/70 text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  All Sites ({allSites.length})
+                </button>
+
+                <button
+                  onClick={() => setSiteFilter('due')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    siteFilter === 'due'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : sitesWithDue.length > 0
+                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:bg-amber-500/25'
+                        : 'bg-muted/70 text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Wallet className="w-3.5 h-3.5" />
+                  Levels Under Due ({sitesWithDue.length})
+                  {grandTotalDue > 0 && <span className="font-mono opacity-90">₹{grandTotalDue.toLocaleString()}</span>}
+                </button>
+
+                <button
+                  onClick={() => setSiteFilter('active')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    siteFilter === 'active'
+                      ? 'bg-foreground text-background shadow-xs'
+                      : 'bg-muted/70 text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Active ({allSites.filter(s => s.status === 'active').length})
+                </button>
+
+                <button
+                  onClick={() => setSiteFilter('completed')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    siteFilter === 'completed'
+                      ? 'bg-foreground text-background shadow-xs'
+                      : 'bg-muted/70 text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Completed ({allSites.filter(s => s.status === 'completed').length})
+                </button>
               </div>
-              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full capitalize shrink-0 ${statusBadge(s.status)}`}>
-                {s.status}
-              </span>
+
+              <div className="relative w-full sm:w-64">
+                <Input
+                  value={siteSearch}
+                  onChange={e => setSiteSearch(e.target.value)}
+                  placeholder="Search site, client, or address..."
+                  className="h-9 text-xs rounded-xl pr-7"
+                />
+                {siteSearch && (
+                  <button
+                    onClick={() => setSiteSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
             </div>
 
-            {s.address && (
-              <p className="text-xs text-muted-foreground/80 flex items-center gap-1.5 truncate">
-                <MapPin className="w-3.5 h-3.5 text-muted-foreground/60 shrink-0" />
-                {s.address}
-              </p>
+            {/* Global Alert Banner if Sites Have Levels Under Due */}
+            {sitesWithDue.length > 0 && siteFilter !== 'due' && (
+              <div className="p-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-card border border-amber-500/40 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-slide-up">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0 font-bold">
+                    <Wallet className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-foreground">
+                      Level Dues Pending: <strong className="text-amber-600 dark:text-amber-400 font-extrabold font-mono text-sm">₹{grandTotalDue.toLocaleString()}</strong> across {sitesWithDue.length} site(s)
+                    </span>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Milestone work is completed or overdue. Sites with unpaid levels are highlighted with unique warning borders.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSiteFilter('due')}
+                  className="h-7 text-xs font-bold rounded-lg border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/15 shrink-0"
+                >
+                  View Due Sites ({sitesWithDue.length})
+                </Button>
+              </div>
             )}
 
-            <div className="flex items-center justify-between text-xs pt-3 border-t border-border/50 font-medium">
-              <span className="text-muted-foreground font-semibold">Budget: ₹{s.budget.toLocaleString()}</span>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {(() => {
-                  const sReqs = (materialRequests || []).filter(r => r.siteId === s.id && r.status !== 'cancelled');
-                  if (sReqs.length === 0) return null;
-                  return (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                      <Package className="w-3 h-3" /> {sReqs.length} {sReqs.length === 1 ? 'order' : 'orders'}
-                    </span>
-                  );
-                })()}
-                {(() => {
-                  const activeRentals = (materialRentals || []).filter(r => r.siteId === s.id && r.status === 'active');
-                  if (activeRentals.length === 0) return null;
-                  return (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
-                      <RefreshCw className="w-3 h-3" /> {activeRentals.length} {activeRentals.length === 1 ? 'rental' : 'rentals'}
-                    </span>
-                  );
-                })()}
-                {(() => {
-                  const pendingForThisSite = (stageCompletionRequests || []).filter(r => r.siteId === s.id && r.status === 'pending');
-                  const hasStageApproval = pendingForThisSite.length > 0 || (s.paymentStages || []).some(st => st.completionStatus === 'completion_requested');
-                  if (!hasStageApproval) return null;
-                  return (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 animate-pulse">
-                      <CheckCircle2 className="w-3 h-3" /> Approval Requested
-                    </span>
-                  );
-                })()}
+            {filteredSites.length === 0 ? (
+              <div className="text-center py-12 bg-card rounded-3xl border border-border/60">
+                <Building2 className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-foreground">No sites found</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {siteFilter === 'due' ? 'No sites currently have levels under due.' : 'Try adjusting your search or filters.'}
+                </p>
               </div>
-              <span className="text-primary font-bold group-hover:translate-x-0.5 transition-transform">View Details →</span>
-            </div>
-          </Card>
-        ))}
-      </div>
-    );
-  })()}
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredSites.map(s => {
+                  const dueInfo = getSiteDueInfo(s);
+
+                  return (
+                    <Card
+                      key={s.id}
+                      onClick={() => setSelectedSiteId(s.id)}
+                      className={`p-5 rounded-3xl bg-card border shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300 cursor-pointer space-y-3.5 group ${
+                        dueInfo.hasOverdue
+                          ? 'border-destructive/70 hover:border-destructive ring-2 ring-destructive/30 bg-gradient-to-br from-destructive/[0.05] via-destructive/[0.01] to-card shadow-md'
+                          : dueInfo.hasDue
+                            ? 'border-amber-500/70 hover:border-amber-500 ring-2 ring-amber-500/30 bg-gradient-to-br from-amber-500/[0.06] via-amber-500/[0.01] to-card shadow-md'
+                            : 'border-border/60 hover:border-primary/50'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform ${
+                            dueInfo.hasOverdue
+                              ? 'bg-destructive/15 text-destructive ring-1 ring-destructive/30'
+                              : dueInfo.hasDue
+                                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 ring-1 ring-amber-500/30'
+                                : 'bg-primary/10 text-primary'
+                          }`}>
+                            <Building2 className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="font-heading font-bold text-base text-foreground truncate">{s.name}</h4>
+                            <p className="text-xs text-muted-foreground truncate">{s.clientName}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                          {/* Unique Status Badges For Levels Under Due */}
+                          {dueInfo.hasOverdue ? (
+                            <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase bg-destructive/15 text-destructive border border-destructive/30 flex items-center gap-1 animate-pulse shadow-2xs">
+                              <AlertCircle className="w-3 h-3" /> Overdue: ₹{dueInfo.totalDue.toLocaleString()}
+                            </span>
+                          ) : dueInfo.hasDue ? (
+                            <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 flex items-center gap-1 shadow-2xs">
+                              <Wallet className="w-3 h-3 text-amber-600" /> Due: ₹{dueInfo.totalDue.toLocaleString()}
+                            </span>
+                          ) : null}
+
+                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full capitalize shrink-0 ${statusBadge(s.status)}`}>
+                            {s.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      {s.address && (
+                        <p className="text-xs text-muted-foreground/80 flex items-center gap-1.5 truncate">
+                          <MapPin className="w-3.5 h-3.5 text-muted-foreground/60 shrink-0" />
+                          {s.address}
+                        </p>
+                      )}
+
+                      {/* Unique Level Under Due Breakdown Strip */}
+                      {dueInfo.hasDue && (
+                        <div className={`p-2.5 rounded-2xl border text-xs space-y-1.5 ${
+                          dueInfo.hasOverdue ? 'bg-destructive/10 border-destructive/30' : 'bg-amber-500/10 border-amber-500/30'
+                        }`}>
+                          <div className="flex items-center justify-between font-bold">
+                            <span className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-foreground">
+                              <Wallet className="w-3.5 h-3.5 text-amber-600" /> Level Under Due:
+                            </span>
+                            <span className={`font-mono text-sm font-extrabold ${dueInfo.hasOverdue ? 'text-destructive' : 'text-amber-700 dark:text-amber-400'}`}>
+                              ₹{dueInfo.totalDue.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1 text-[10px]">
+                            {dueInfo.dueLevels.map((st, i) => (
+                              <span key={i} className="px-2 py-0.5 rounded-lg bg-card/90 border border-border/60 font-semibold text-foreground">
+                                {st.stageName}: <strong className={dueInfo.hasOverdue ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'}>₹{st.balance.toLocaleString()}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between text-xs pt-3 border-t border-border/50 font-medium">
+                        <span className="text-muted-foreground font-semibold">Budget: ₹{s.budget.toLocaleString()}</span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {(() => {
+                            const sReqs = (materialRequests || []).filter(r => r.siteId === s.id && r.status !== 'cancelled');
+                            if (sReqs.length === 0) return null;
+                            return (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                                <Package className="w-3 h-3" /> {sReqs.length} {sReqs.length === 1 ? 'order' : 'orders'}
+                              </span>
+                            );
+                          })()}
+                          {(() => {
+                            const sRentals = (materialRentals || []).filter(r => 
+                              (r.siteId && (r.siteId === s.id || String(r.siteId) === String(s.id))) ||
+                              (r.siteName && s.name && r.siteName.trim().toLowerCase() === s.name.trim().toLowerCase())
+                            );
+                            if (sRentals.length === 0) return null;
+                            const activeCount = sRentals.filter(r => r.status === 'active').length;
+                            const totalCost = sRentals.reduce((sum, r) => {
+                              if (r.totalRentalCost !== undefined && r.status === 'returned') return sum + r.totalRentalCost;
+                              const todayStr = format(new Date(), 'yyyy-MM-dd');
+                              const startMs = new Date(r.startDate + 'T00:00:00').getTime();
+                              const endMs = new Date((r.endDate || todayStr) + 'T00:00:00').getTime();
+                              const days = Math.max(1, Math.floor((endMs - startMs) / 86400000) + 1);
+                              return sum + (days * (r.quantity || 1) * (r.rentalRatePerDay || 0)) + (r.transitCost || 0);
+                            }, 0);
+
+                            return (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
+                                <RefreshCw className="w-3 h-3" />
+                                {activeCount > 0
+                                  ? `${activeCount} active rental${activeCount > 1 ? 's' : ''}`
+                                  : `${sRentals.length} rental${sRentals.length > 1 ? 's' : ''} (₹${totalCost.toLocaleString()})`
+                                }
+                              </span>
+                            );
+                          })()}
+                          {(() => {
+                            const pendingForThisSite = (stageCompletionRequests || []).filter(r => r.siteId === s.id && r.status === 'pending');
+                            const hasStageApproval = pendingForThisSite.length > 0 || (s.paymentStages || []).some(st => st.completionStatus === 'completion_requested');
+                            if (!hasStageApproval) return null;
+                            return (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 animate-pulse">
+                                <CheckCircle2 className="w-3 h-3" /> Approval Requested
+                              </span>
+                            );
+                          })()}
+                        </div>
+                        <span className="text-primary font-bold group-hover:translate-x-0.5 transition-transform">View Details →</span>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 };
