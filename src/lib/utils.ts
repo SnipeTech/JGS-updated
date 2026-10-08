@@ -192,3 +192,251 @@ export function getSiteAvailableStock(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+
+/**
+ * Strips star asterisks from the end of a product name
+ * e.g. "Asian Paints Royale **" -> "Asian Paints Royale"
+ */
+export function getBaseMaterialName(name?: string): string {
+  if (!name) return '';
+  return name.replace(/\s*\*+$/, '').trim();
+}
+
+/**
+ * Extracts how many asterisks/stars are at the end of a product name
+ */
+export function getMaterialStarCount(name?: string): number {
+  if (!name) return 0;
+  const match = name.trim().match(/\*+$/);
+  return match ? match[0].length : 0;
+}
+
+export interface StorageStarBadgeInfo {
+  baseName: string;
+  batchNumber: number;
+  isInitialBatch: boolean;
+  isRestock: boolean;
+  badgeLabel: string;
+  shortBadge: string;
+  badgeTooltip: string;
+  colorVariant: 'initial' | 'restock_early' | 'restock_multi';
+  starCount: number;
+  starString: string;
+  isNew: boolean;
+  isOld: boolean;
+  label: string;
+  suggestedName: string;
+  arrivalNote?: string;
+}
+
+/**
+ * Calculates batch/replenishment status for a warehouse material:
+ * Cleary identifies '🟢 New Stock' (Latest Arrival) vs '📦 Old Stock' (Previous/Earlier Arrivals).
+ */
+export function getStorageStarBadge(
+  name?: string,
+  existingMaterials: Array<{ id?: string; name: string; isStoreRoom?: boolean }> = [],
+  storageDispatches: Array<{ materialName: string }> = [],
+  currentId?: string
+): StorageStarBadgeInfo {
+  const baseName = getBaseMaterialName(name);
+  if (!baseName) {
+    return {
+      baseName: '',
+      batchNumber: 1,
+      isInitialBatch: true,
+      isRestock: false,
+      badgeLabel: 'New Stock (Latest Arrival)',
+      shortBadge: '🟢 New Stock',
+      badgeTooltip: 'New warehouse stock entry',
+      colorVariant: 'initial',
+      starCount: 1,
+      starString: '',
+      isNew: true,
+      isOld: false,
+      label: 'New Stock',
+      suggestedName: '',
+      arrivalNote: 'Latest Arrival'
+    };
+  }
+
+  // Check matching items in existing materials
+  const matchingCatalog = (existingMaterials || []).filter(m => {
+    return getBaseMaterialName(m.name).toLowerCase() === baseName.toLowerCase();
+  });
+
+  // If only 1 item or no matching items found
+  if (matchingCatalog.length <= 1) {
+    return {
+      baseName,
+      batchNumber: 1,
+      isInitialBatch: true,
+      isRestock: false,
+      badgeLabel: 'New Stock (Latest Arrival)',
+      shortBadge: '🟢 New Stock',
+      badgeTooltip: 'New / Latest Stock in warehouse',
+      colorVariant: 'initial',
+      starCount: 1,
+      starString: '',
+      isNew: true,
+      isOld: false,
+      label: 'New Stock',
+      suggestedName: baseName,
+      arrivalNote: 'Latest Arrival'
+    };
+  }
+
+  // Multiple items with same material name exist in warehouse!
+  // Determine if current item is the latest or an older arrival
+  const extractTime = (idStr?: string) => {
+    const match = (idStr || '').match(/\d{10,}/);
+    return match ? Number(match[0]) : 0;
+  };
+
+  const sorted = [...matchingCatalog].sort((a, b) => {
+    const timeA = extractTime(a.id);
+    const timeB = extractTime(b.id);
+    if (timeA !== timeB) return timeB - timeA; // newest first
+    return 0;
+  });
+
+  const idx = currentId ? sorted.findIndex(m => m.id === currentId) : 0;
+  const isLatest = idx <= 0;
+
+  if (isLatest) {
+    return {
+      baseName,
+      batchNumber: sorted.length,
+      isInitialBatch: false,
+      isRestock: true,
+      badgeLabel: 'New Stock (Latest Arrival)',
+      shortBadge: '🟢 New Stock',
+      badgeTooltip: 'Latest stock arrival for this item',
+      colorVariant: 'initial',
+      starCount: sorted.length,
+      starString: '',
+      isNew: true,
+      isOld: false,
+      label: 'New Stock',
+      suggestedName: baseName,
+      arrivalNote: 'Latest Arrival'
+    };
+  }
+
+  // Older stock arrival
+  const arrivalIndex = idx; // 1 for first previous, 2 for earlier, etc.
+  const arrivalNote = arrivalIndex === 1 ? 'Previous Arrival' : `Earlier Arrival #${arrivalIndex}`;
+
+  return {
+    baseName,
+    batchNumber: sorted.length - idx,
+    isInitialBatch: false,
+    isRestock: true,
+    badgeLabel: `Old Stock (${arrivalNote})`,
+    shortBadge: '📦 Old Stock',
+    badgeTooltip: `Old Stock - ${arrivalNote} of this material`,
+    colorVariant: idx === 1 ? 'restock_early' : 'restock_multi',
+    starCount: idx,
+    starString: '',
+    isNew: false,
+    isOld: true,
+    label: 'Old Stock',
+    suggestedName: baseName,
+    arrivalNote
+  };
+}
+
+export interface StoreRoomStockClassification {
+  isNewStock: boolean;
+  isOldStock: boolean;
+  isDuplicateName: boolean;
+  badgeLabel: string;
+  badgeTag: string;
+  arrivalNote: string;
+  colorVariant: 'new' | 'old_prev' | 'old_earlier';
+  orderIndex: number;
+  totalDuplicates: number;
+}
+
+export function getStoreRoomStockClassification(
+  item: { id?: string; name: string; buyingPrice?: number; createdAt?: string },
+  allStoreItems: Array<{ id?: string; name: string; buyingPrice?: number; createdAt?: string }> = []
+): StoreRoomStockClassification {
+  const baseName = getBaseMaterialName(item?.name).toLowerCase().trim();
+  if (!baseName) {
+    return {
+      isNewStock: true,
+      isOldStock: false,
+      isDuplicateName: false,
+      badgeLabel: 'New Stock',
+      badgeTag: '🟢 New Stock',
+      arrivalNote: 'In Stock',
+      colorVariant: 'new',
+      orderIndex: 0,
+      totalDuplicates: 1
+    };
+  }
+
+  const sameNameItems = allStoreItems.filter(
+    m => getBaseMaterialName(m.name).toLowerCase().trim() === baseName
+  );
+
+  if (sameNameItems.length <= 1) {
+    return {
+      isNewStock: true,
+      isOldStock: false,
+      isDuplicateName: false,
+      badgeLabel: 'New Stock',
+      badgeTag: '🟢 New Stock',
+      arrivalNote: 'In Stock',
+      colorVariant: 'new',
+      orderIndex: 0,
+      totalDuplicates: 1
+    };
+  }
+
+  const extractTime = (idStr?: string) => {
+    const match = (idStr || '').match(/\d{10,}/);
+    return match ? Number(match[0]) : 0;
+  };
+
+  const sorted = [...sameNameItems].sort((a, b) => {
+    const timeA = extractTime(a.id);
+    const timeB = extractTime(b.id);
+    if (timeA !== timeB) return timeB - timeA;
+    return 0;
+  });
+
+  const idx = sorted.findIndex(m => m.id === item.id);
+  const isNewest = idx === 0 || idx === -1;
+
+  if (isNewest) {
+    return {
+      isNewStock: true,
+      isOldStock: false,
+      isDuplicateName: true,
+      badgeLabel: 'New Stock (Latest Arrival)',
+      badgeTag: '🟢 New Stock',
+      arrivalNote: 'Latest Arrival',
+      colorVariant: 'new',
+      orderIndex: 0,
+      totalDuplicates: sameNameItems.length
+    };
+  }
+
+  const arrivalNum = idx;
+  const subNote = arrivalNum === 1 ? 'Previous Arrival' : `Earlier Arrival #${arrivalNum}`;
+
+  return {
+    isNewStock: false,
+    isOldStock: true,
+    isDuplicateName: true,
+    badgeLabel: `Old Stock (${subNote})`,
+    badgeTag: '📦 Old Stock',
+    arrivalNote: subNote,
+    colorVariant: idx === 1 ? 'old_prev' : 'old_earlier',
+    orderIndex: idx,
+    totalDuplicates: sameNameItems.length
+  };
+}
+

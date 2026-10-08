@@ -8,13 +8,21 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns';
 import {
   TrendingUp, TrendingDown, IndianRupee, MapPin, UserCircle, Clock,
-  FileDown, Building2, Package, Truck, Wallet, Coffee, CheckCircle2, AlertTriangle, RefreshCw, Users
+  FileDown, Building2, Package, Truck, Wallet, Coffee, CheckCircle2, AlertTriangle, RefreshCw, Users, Wrench,
+  Check, X, ShieldCheck
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { toast } from 'sonner';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 
 export const ReportsTab = () => {
-  const { dailyLogs, sites, manualExpenses, materialRequests, materialRentals, staffList, attendances, addExpense, deleteExpense } = useApp();
+  const {
+    dailyLogs, sites, manualExpenses, materialRequests, materialRentals,
+    staffList, attendances, addExpense, deleteExpense,
+    verifyAndPaySupervisorExpense, rejectSupervisorExpense,
+    storeRoomDispatches = [], vehicleMaintenance = []
+  } = useApp();
 
   const [selectedSiteId, setSelectedSiteId] = useState('all');
   const [fromDate, setFromDate] = useState(
@@ -46,6 +54,77 @@ export const ReportsTab = () => {
     });
     setExpenseAmount('');
     setExpenseDescription('');
+  };
+
+  // Supervisor Claims State & Handlers
+  const [showAllDatesClaims, setShowAllDatesClaims] = useState(false);
+  const [payingClaim, setPayingClaim] = useState<{
+    staffId: string;
+    date: string;
+    staffName: string;
+    siteName: string;
+    amount: number;
+    notes: string;
+    method: string;
+  } | null>(null);
+  const [rejectingClaim, setRejectingClaim] = useState<{
+    staffId: string;
+    date: string;
+    staffName: string;
+    amount: number;
+  } | null>(null);
+
+  const [payAmountInput, setPayAmountInput] = useState<string>('');
+  const [payMethodInput, setPayMethodInput] = useState<string>('Cash');
+  const [payNotesInput, setPayNotesInput] = useState<string>('');
+  const [rejectionReasonInput, setRejectionReasonInput] = useState<string>('');
+
+  const openPayDialog = (claim: {
+    staffId: string;
+    date: string;
+    staffName: string;
+    siteName: string;
+    amount: number;
+    notes: string;
+    method: string;
+  }) => {
+    setPayingClaim(claim);
+    setPayAmountInput(String(claim.amount));
+    setPayMethodInput(claim.method || 'Cash');
+    setPayNotesInput(claim.notes || '');
+  };
+
+  const handleConfirmPay = () => {
+    if (!payingClaim) return;
+    const finalAmt = Number(payAmountInput);
+    if (isNaN(finalAmt) || finalAmt <= 0) {
+      toast.error('Please enter a valid payout amount');
+      return;
+    }
+    verifyAndPaySupervisorExpense(payingClaim.staffId, payingClaim.date, {
+      paidAmount: finalAmt,
+      paymentMethod: payMethodInput,
+      notes: payNotesInput
+    });
+    toast.success(`Supervisor expense of ₹${finalAmt.toLocaleString()} verified, paid, and added to the company expense report!`);
+    setPayingClaim(null);
+  };
+
+  const openRejectDialog = (claim: {
+    staffId: string;
+    date: string;
+    staffName: string;
+    amount: number;
+  }) => {
+    setRejectingClaim(claim);
+    setRejectionReasonInput('');
+  };
+
+  const handleConfirmReject = () => {
+    if (!rejectingClaim) return;
+    rejectSupervisorExpense(rejectingClaim.staffId, rejectingClaim.date, rejectionReasonInput || 'Rejected by Admin');
+    toast.info(`Claim of ₹${rejectingClaim.amount.toLocaleString()} rejected.`);
+    setRejectingClaim(null);
   };
 
   // Quick period presets
@@ -93,6 +172,77 @@ export const ReportsTab = () => {
     });
   }, [manualExpenses, fromDate, toDate, selectedSiteId]);
 
+  // Filtered supervisor expense claims
+  const supervisorClaims = useMemo(() => {
+    const list: {
+      id: string;
+      staffId: string;
+      staffName: string;
+      role: string;
+      date: string;
+      siteId?: string;
+      siteName: string;
+      amount: number;
+      method: string;
+      notes: string;
+      status: 'pending' | 'paid' | 'rejected';
+      paidAmount?: number;
+      paidAt?: string;
+      verifiedBy?: string;
+      rejectionReason?: string;
+    }[] = [];
+
+    (attendances || []).forEach(a => {
+      const amt = Number(a.expenseAmount) || 0;
+      if (amt <= 0 && !a.expensePaidAmount) return;
+
+      const staffObj = staffList.find(s => s.id === a.staffId);
+      const isDateMatch = (a.date >= fromDate && a.date <= toDate) || showAllDatesClaims;
+      const isSiteMatch = selectedSiteId === 'all' || a.siteId === selectedSiteId;
+
+      if (!isDateMatch && a.expenseStatus === 'paid') return;
+      if (!isDateMatch && !showAllDatesClaims && a.expenseStatus !== 'pending') return;
+      if (!isSiteMatch) return;
+
+      const siteObj = sites.find(s => s.id === a.siteId);
+      const status = a.expenseStatus || 'pending';
+
+      list.push({
+        id: a.id || `claim_${a.staffId}_${a.date}`,
+        staffId: a.staffId,
+        staffName: staffObj?.name || 'Supervisor',
+        role: staffObj?.role || 'supervisor',
+        date: a.date,
+        siteId: a.siteId,
+        siteName: siteObj?.name || a.siteName || 'No site assigned',
+        amount: amt,
+        method: a.expensePaymentMethod || 'Cash',
+        notes: a.expenseNotes || '',
+        status: status as 'pending' | 'paid' | 'rejected',
+        paidAmount: a.expensePaidAmount,
+        paidAt: a.expensePaidAt,
+        verifiedBy: a.expenseVerifiedBy,
+        rejectionReason: a.expenseRejectionReason
+      });
+    });
+
+    return list.sort((a, b) => {
+      if (a.status === 'pending' && b.status !== 'pending') return -1;
+      if (a.status !== 'pending' && b.status === 'pending') return 1;
+      return b.date.localeCompare(a.date);
+    });
+  }, [attendances, staffList, sites, fromDate, toDate, selectedSiteId, showAllDatesClaims]);
+
+  const pendingClaimsCount = useMemo(() => {
+    return supervisorClaims.filter(c => c.status === 'pending').length;
+  }, [supervisorClaims]);
+
+  const paidClaimsTotal = useMemo(() => {
+    return supervisorClaims
+      .filter(c => c.status === 'paid' && c.date >= fromDate && c.date <= toDate)
+      .reduce((sum, c) => sum + (c.paidAmount || c.amount || 0), 0);
+  }, [supervisorClaims, fromDate, toDate]);
+
   // 1. INCOMES
   // A) Direct Client Receipts from Daily Logs
   const directClientIncome = useMemo(() => {
@@ -127,10 +277,23 @@ export const ReportsTab = () => {
   }, [filteredLogs]);
 
   const reqMaterialCost = useMemo(() => {
-    return filteredRequests.reduce((sum, r) => sum + (r.materialCost || r.supplierPrice || 0), 0);
+    return filteredRequests.reduce((sum, r) => sum + (r.materialCost || r.supplierPrice || r.storeRoomAmount || 0), 0);
   }, [filteredRequests]);
 
-  const totalMaterialsExpense = logMaterialCost + reqMaterialCost;
+  const storeRoomDispatchesCost = useMemo(() => {
+    const list = (storeRoomDispatches || []).filter(d => {
+      if (selectedSiteId !== 'all' && d.siteId !== selectedSiteId) return false;
+      const dDate = d.deliveryDate || d.startDate || d.date || fromDate;
+      return dDate >= fromDate && dDate <= toDate;
+    });
+    return list.reduce((sum, d) => {
+      if (filteredRequests.some(r => r.id === d.id)) return sum;
+      if (d.storeRoomAmount !== undefined && d.storeRoomAmount > 0) return sum + d.storeRoomAmount;
+      return sum;
+    }, 0);
+  }, [storeRoomDispatches, selectedSiteId, fromDate, toDate, filteredRequests]);
+
+  const totalMaterialsExpense = logMaterialCost + reqMaterialCost + storeRoomDispatchesCost;
 
   // B) Transport, Logistics Transit & Petrol
   const logTransportCost = useMemo(() => {
@@ -426,8 +589,17 @@ export const ReportsTab = () => {
   }, [paidHistoryRecords]);
 
   const totalManualExpense = useMemo(() => {
-    return filteredManualExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-  }, [filteredManualExpenses]);
+    return filteredManualExpenses.reduce((sum, e) => {
+      if (e.category === 'Store Room Equipment & Materials') {
+        const matchInReq = filteredRequests.some(r => 
+          (r.sourceType === 'store_room' || r.isStoreRoom) && 
+          (r.materialCost === e.amount || r.storeRoomAmount === e.amount)
+        );
+        if (matchInReq) return sum;
+      }
+      return sum + (e.amount || 0);
+    }, 0);
+  }, [filteredManualExpenses, filteredRequests]);
 
   // E) Rental Equipment & Machinery on Site
   const filteredRentals = useMemo(() => {
@@ -453,8 +625,29 @@ export const ReportsTab = () => {
     }, 0);
   }, [filteredRentals, fromDate, toDate]);
 
+  // F) Vehicle Fleet Maintenance & Workshop Servicing
+  const filteredVehicleMaintenance = useMemo(() => {
+    return (vehicleMaintenance || []).filter(m => {
+      const mDate = m.date || '';
+      const inDate = mDate >= fromDate && mDate <= toDate;
+      if (!inDate) return false;
+      if (selectedSiteId === 'all') return true;
+      // If a specific site is selected, check if this vehicle made trips to that site in the period
+      const vehTripsToSite = (materialRequests || []).some(
+        r => r.siteId === selectedSiteId && (r.vehicleId === m.vehicleId || r.vehicleNumber === m.vehicleNumber)
+      ) || (storeRoomDispatches || []).some(
+        d => d.siteId === selectedSiteId && (d.vehicleId === m.vehicleId || d.vehicleNumber === m.vehicleNumber)
+      );
+      return vehTripsToSite;
+    });
+  }, [vehicleMaintenance, fromDate, toDate, selectedSiteId, materialRequests, storeRoomDispatches]);
+
+  const totalVehicleMaintenanceExpense = useMemo(() => {
+    return filteredVehicleMaintenance.reduce((sum, m) => sum + (Number(m.cost) || 0), 0);
+  }, [filteredVehicleMaintenance]);
+
   // Total Outflow
-  const totalOutflow = totalMaterialsExpense + totalTransportExpense + totalRentalExpense + totalMiscExpense + totalPayrollExpense + totalManualExpense;
+  const totalOutflow = totalMaterialsExpense + totalTransportExpense + totalRentalExpense + totalVehicleMaintenanceExpense + totalMiscExpense + totalPayrollExpense + totalManualExpense;
 
   // 3. NET PROFIT OR LOSS
   const netProfitLoss = totalInflow - totalOutflow;
@@ -546,6 +739,7 @@ export const ReportsTab = () => {
       ['Staff Payroll (Supervisors & Drivers)', (payrollData.supervisorTotal + payrollData.driverTotal).toLocaleString(), totalOutflow > 0 ? `${(((payrollData.supervisorTotal + payrollData.driverTotal) / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Supervisor & Driver salaries, OT & transit'],
       ['Site Crew Team Wages', payrollData.crewTotal.toLocaleString(), totalOutflow > 0 ? `${((payrollData.crewTotal / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Under-labour crew: Painters, Plumbers, Helpers'],
       ['Transport, Transit & Petrol', totalTransportExpense.toLocaleString(), totalOutflow > 0 ? `${((totalTransportExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Daily travel + Driver dispatches & fuel'],
+      ['Vehicle Service & Maintenance', totalVehicleMaintenanceExpense.toLocaleString(), totalOutflow > 0 ? `${((totalVehicleMaintenanceExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', `${filteredVehicleMaintenance.length} fleet service & repair logs`],
       ['Site Incidentals & Miscellaneous', totalMiscExpense.toLocaleString(), totalOutflow > 0 ? `${((totalMiscExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Food, tea, site tools & misc'],
       ['Manual General Expenses', totalManualExpense.toLocaleString(), totalOutflow > 0 ? `${((totalManualExpense / totalOutflow) * 100).toFixed(1)}%` : '0%', 'Office rent, tools, custom entries'],
       ['TOTAL EXPENSES', totalOutflow.toLocaleString(), '100%', 'All operational expenditures']
@@ -628,6 +822,57 @@ export const ReportsTab = () => {
         }
       }
     });
+
+    // 4. Vehicle Fleet Maintenance Breakdown Table
+    if (filteredVehicleMaintenance.length > 0) {
+      const lastY3 = (doc as any).lastAutoTable?.finalY || 200;
+      const startYMaint = lastY3 > 220 ? 25 : lastY3 + 14;
+      if (lastY3 > 220) {
+        doc.addPage();
+      }
+      doc.setFontSize(11);
+      doc.setTextColor(40);
+      doc.text('4. Vehicle Fleet Service & Maintenance Ledger', 14, startYMaint - 4);
+
+      const maintHead = [['Date', 'Vehicle', 'Service / Repair Type', 'Workshop / Bill', 'Cost (Rs)']];
+      const maintBody: any[] = filteredVehicleMaintenance.map(m => [
+        m.date,
+        `${m.vehicleName} (${m.vehicleNumber})`,
+        m.type,
+        [m.workshopName, m.billNumber ? `Bill #${m.billNumber}` : ''].filter(Boolean).join(' - ') || '-',
+        (Number(m.cost) || 0).toLocaleString()
+      ]);
+
+      maintBody.push([
+        'TOTAL MAINTENANCE',
+        `${filteredVehicleMaintenance.length} service logs`,
+        '-',
+        '-',
+        totalVehicleMaintenanceExpense.toLocaleString()
+      ]);
+
+      autoTable(doc, {
+        startY: startYMaint,
+        head: maintHead,
+        body: maintBody,
+        theme: 'grid',
+        headStyles: { fillColor: [147, 51, 234], fontSize: 8, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 8 },
+        columnStyles: {
+          0: { cellWidth: 25 },
+          1: { fontStyle: 'bold', cellWidth: 50 },
+          2: { cellWidth: 40 },
+          3: { cellWidth: 42 },
+          4: { halign: 'right', fontStyle: 'bold', cellWidth: 25 }
+        },
+        didParseCell: function(data) {
+          if (data.row.index === maintBody.length - 1) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [243, 232, 255];
+          }
+        }
+      });
+    }
 
     const safePeriod = `${fromDate}_to_${toDate}`;
     doc.save(`JGS_Company_Profit_Loss_${safePeriod}.pdf`);
@@ -802,8 +1047,8 @@ export const ReportsTab = () => {
         </div>
       </Card>
 
-      {/* 5 Financial Pillar KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {/* 6 Financial Pillar KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Income Card */}
         <Card className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 space-y-1">
           <span className="text-[10px] uppercase font-bold text-emerald-800 dark:text-emerald-300 tracking-wider block">
@@ -826,7 +1071,7 @@ export const ReportsTab = () => {
             ₹{totalMaterialsExpense.toLocaleString()}
           </p>
           <p className="text-[11px] text-muted-foreground">
-            Logs + Supplier requisitions
+            Logs + Requisitions
           </p>
         </Card>
 
@@ -839,14 +1084,27 @@ export const ReportsTab = () => {
             ₹{totalRentalExpense.toLocaleString()}
           </p>
           <p className="text-[11px] text-muted-foreground">
-            {filteredRentals.length} machinery & rental items
+            {filteredRentals.length} machinery items
+          </p>
+        </Card>
+
+        {/* Vehicle Maintenance Card */}
+        <Card className="p-4 rounded-2xl bg-purple-500/[0.08] border border-purple-500/25 shadow-xs space-y-1">
+          <span className="text-[10px] uppercase font-bold text-purple-700 dark:text-purple-300 tracking-wider flex items-center gap-1">
+            <Wrench className="w-3 h-3 text-purple-600" /> Vehicle Maintenance
+          </span>
+          <p className="text-2xl font-heading font-bold text-purple-700 dark:text-purple-400">
+            ₹{totalVehicleMaintenanceExpense.toLocaleString()}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {filteredVehicleMaintenance.length} service logs
           </p>
         </Card>
 
         {/* Payroll Card */}
         <Card className="p-4 rounded-2xl bg-card border border-border/50 shadow-xs space-y-1">
           <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider flex items-center justify-between">
-            <span>👷 Staff & Crew Payroll</span>
+            <span>👷 Staff Payroll</span>
             {totalPaidPayroll > 0 && (
               <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 font-bold">
                 ✓ Disbursed
@@ -858,17 +1116,12 @@ export const ReportsTab = () => {
           </p>
           <div className="text-[10px] text-muted-foreground space-y-0.5 pt-0.5">
             <div>Sup: ₹{payrollData.supervisorTotal.toLocaleString()} · Drv: ₹{payrollData.driverTotal.toLocaleString()}</div>
-            <div className="text-amber-700 dark:text-amber-300 font-medium">Crew Teams: ₹{payrollData.crewTotal.toLocaleString()}</div>
-            {totalPaidPayroll > 0 && (
-              <div className="text-emerald-600 dark:text-emerald-400 font-semibold pt-0.5 border-t border-border/30">
-                Disbursed: ₹{totalPaidPayroll.toLocaleString()}
-              </div>
-            )}
+            <div className="text-amber-700 dark:text-amber-300 font-medium">Crew: ₹{payrollData.crewTotal.toLocaleString()}</div>
           </div>
         </Card>
 
         {/* Transport & Misc */}
-        <Card className="p-4 rounded-2xl bg-card border border-border/50 shadow-xs space-y-1 col-span-2 sm:col-span-1">
+        <Card className="p-4 rounded-2xl bg-card border border-border/50 shadow-xs space-y-1">
           <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
             🚚 Transit & Site Food
           </span>
@@ -966,6 +1219,21 @@ export const ReportsTab = () => {
               </div>
             </div>
 
+            <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-purple-500/[0.06] border border-purple-500/20">
+              <div>
+                <span className="font-semibold text-foreground flex items-center gap-1.5">
+                  <Wrench className="w-3.5 h-3.5 text-purple-600" />
+                  Vehicle Service & Maintenance
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  Fleet workshops, oil, tyres & servicing ({filteredVehicleMaintenance.length} service logs)
+                </span>
+              </div>
+              <span className="font-bold text-sm text-purple-700 dark:text-purple-400 font-mono">
+                ₹{totalVehicleMaintenanceExpense.toLocaleString()}
+              </span>
+            </div>
+
             <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-muted/40">
               <div>
                 <span className="font-semibold text-foreground block">Transport & Vehicle Transit</span>
@@ -981,6 +1249,20 @@ export const ReportsTab = () => {
               </div>
               <span className="font-bold text-sm text-destructive">₹{totalMiscExpense.toLocaleString()}</span>
             </div>
+
+            {/* Supervisor Attendance Expense (Paid Claims) */}
+            {paidClaimsTotal > 0 && (
+              <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-emerald-500/[0.06] border border-emerald-500/20">
+                <div>
+                  <span className="font-semibold text-foreground flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    Supervisor Field Claims (Paid)
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">Admin verified & paid out-of-pocket expenses</span>
+                </div>
+                <span className="font-bold text-sm text-emerald-700 dark:text-emerald-400 font-mono">₹{paidClaimsTotal.toLocaleString()}</span>
+              </div>
+            )}
 
             <div className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-muted/40">
               <div>
@@ -1076,6 +1358,202 @@ export const ReportsTab = () => {
         )}
       </Card>
 
+      {/* Itemized Vehicle Service & Maintenance Ledger Card */}
+      {filteredVehicleMaintenance.length > 0 && (
+        <Card className="p-4 rounded-2xl bg-card border border-border/60 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-border/40">
+            <div className="flex items-center gap-2">
+              <Wrench className="w-4 h-4 text-purple-600" />
+              <h4 className="font-heading font-bold text-sm text-foreground">
+                Vehicle Fleet Service & Maintenance Ledger ({filteredVehicleMaintenance.length})
+              </h4>
+            </div>
+            <div className="text-xs text-muted-foreground flex items-center gap-3">
+              <span>Total Maintenance Cost: <strong className="text-destructive font-bold font-mono">₹{totalVehicleMaintenanceExpense.toLocaleString()}</strong></span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {filteredVehicleMaintenance.map(rec => (
+              <div
+                key={rec.id}
+                className="p-3 bg-muted/25 hover:bg-muted/40 rounded-xl border border-border/50 space-y-1.5 transition-all shadow-2xs"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span className="font-bold text-xs text-foreground block">
+                      {rec.vehicleName} <span className="font-mono text-muted-foreground text-[11px]">({rec.vehicleNumber})</span>
+                    </span>
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-500/25">
+                      {rec.type}
+                    </span>
+                  </div>
+                  <span className="font-mono font-bold text-xs text-destructive">
+                    ₹{(Number(rec.cost) || 0).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/30">
+                  <span>📅 {rec.date}</span>
+                  {rec.workshopName && <span>🏪 {rec.workshopName}</span>}
+                  {rec.billNumber && <span>🧾 #{rec.billNumber}</span>}
+                </div>
+                {rec.notes && (
+                  <p className="text-[10px] text-muted-foreground italic line-clamp-1">{rec.notes}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Supervisor Field Expense Claims Section */}
+      <div className="mt-8 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-foreground flex items-center gap-2">
+              <IndianRupee className="w-4 h-4 text-amber-500" /> Supervisor Field Expense Claims
+              {pendingClaimsCount > 0 && (
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                  {pendingClaimsCount} Pending Action
+                </span>
+              )}
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Review supervisor out-of-pocket claims (travel, petrol, tools, tea/refreshments). Only verified & paid claims are booked to the expense report.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAllDatesClaims(!showAllDatesClaims)}
+              className={`h-8 text-xs rounded-xl font-semibold border ${
+                showAllDatesClaims ? 'bg-primary/10 border-primary text-primary' : ''
+              }`}
+            >
+              {showAllDatesClaims ? 'Showing All Dates' : 'Show All Pending Across Dates'}
+            </Button>
+          </div>
+        </div>
+
+        {/* Claims Table / List Card */}
+        <Card className="p-4 rounded-2xl bg-card border border-border/60 shadow-xs space-y-3">
+          {supervisorClaims.length === 0 ? (
+            <div className="text-center py-10 bg-muted/20 rounded-xl text-muted-foreground text-xs border border-dashed border-border/50">
+              No supervisor expense claims logged for this period.
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {supervisorClaims.map(claim => (
+                <div
+                  key={claim.id}
+                  className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all ${
+                    claim.status === 'paid'
+                      ? 'bg-emerald-500/[0.04] border-emerald-500/30'
+                      : claim.status === 'rejected'
+                        ? 'bg-destructive/[0.04] border-destructive/25 opacity-75'
+                        : 'bg-amber-500/[0.06] border-amber-500/35 shadow-2xs'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-sm text-foreground">{claim.staffName}</span>
+                      <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-muted text-muted-foreground border border-border/40 font-mono">
+                        {claim.date}
+                      </span>
+                      {claim.siteName && claim.siteName !== 'No site assigned' && (
+                        <span className="text-[10px] font-semibold text-primary flex items-center gap-1 bg-primary/10 px-2 py-0.5 rounded">
+                          <MapPin className="w-3 h-3" /> {claim.siteName}
+                        </span>
+                      )}
+
+                      {/* Status Badge */}
+                      <span className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full border ${
+                        claim.status === 'paid'
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                          : claim.status === 'rejected'
+                            ? 'bg-destructive/15 text-destructive border-destructive/30'
+                            : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 animate-pulse'
+                      }`}>
+                        {claim.status === 'paid' ? '✓ Paid & Added to Reports' : claim.status === 'rejected' ? '❌ Rejected' : '⏳ Pending Admin Review'}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-foreground/90 font-medium">
+                      {claim.notes ? `"${claim.notes}"` : 'No claim notes entered'}
+                      <span className="text-muted-foreground text-[11px] font-normal ml-2">
+                        · Preferred Mode: <strong>{claim.method}</strong>
+                      </span>
+                    </p>
+
+                    {claim.status === 'paid' && (
+                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                        ✓ Disbursed ₹{(claim.paidAmount || claim.amount).toLocaleString()} on {claim.paidAt || 'recently'} {claim.verifiedBy ? `by ${claim.verifiedBy}` : ''}
+                      </p>
+                    )}
+
+                    {claim.status === 'rejected' && claim.rejectionReason && (
+                      <p className="text-[11px] text-destructive italic">
+                        Rejection reason: {claim.rejectionReason}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                    <div className="text-right mr-1">
+                      <span className="text-[10px] uppercase font-bold text-muted-foreground block">
+                        {claim.status === 'paid' ? 'Paid Amount' : 'Claimed'}
+                      </span>
+                      <span className="font-heading font-extrabold text-base text-foreground">
+                        ₹{(claim.status === 'paid' ? (claim.paidAmount || claim.amount) : claim.amount).toLocaleString()}
+                      </span>
+                    </div>
+
+                    {claim.status === 'pending' && (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() => openPayDialog(claim)}
+                          className="h-8 px-3 rounded-xl text-xs font-bold gap-1 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                        >
+                          <IndianRupee className="w-3.5 h-3.5" /> Verify & Pay
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openRejectDialog(claim)}
+                          className="h-8 px-2.5 rounded-xl text-xs font-semibold text-destructive hover:bg-destructive/10 border-destructive/30"
+                        >
+                          <X className="w-3.5 h-3.5" /> Reject
+                        </Button>
+                      </>
+                    )}
+
+                    {claim.status === 'rejected' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openPayDialog(claim)}
+                        className="h-8 px-3 rounded-xl text-xs font-bold gap-1 text-primary hover:bg-primary/10 border-primary/30"
+                      >
+                        Re-verify & Pay
+                      </Button>
+                    )}
+
+                    {claim.status === 'paid' && (
+                      <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-500/20">
+                        ✓ In Expense Report
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
       {/* Manual Expenses Section */}
       <div className="mt-8 space-y-4">
         <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -1095,6 +1573,7 @@ export const ReportsTab = () => {
                   <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Select Category" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Office Rent">Office Rent</SelectItem>
+                    <SelectItem value="Vehicle & Fleet Maintenance">Vehicle & Fleet Maintenance</SelectItem>
                     <SelectItem value="Travel & Fuel">Travel & Fuel</SelectItem>
                     <SelectItem value="Tools & Equipment">Tools & Equipment</SelectItem>
                     <SelectItem value="Utilities & Bills">Utilities & Bills</SelectItem>
@@ -1188,6 +1667,133 @@ export const ReportsTab = () => {
           </Card>
         </div>
       </div>
+
+      {/* Verify & Pay Claim Modal Dialog */}
+      <Dialog open={!!payingClaim} onOpenChange={(open) => !open && setPayingClaim(null)}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <IndianRupee className="w-5 h-5 text-emerald-600" />
+              Verify & Pay Supervisor Expense
+            </DialogTitle>
+          </DialogHeader>
+
+          {payingClaim && (
+            <div className="space-y-4 text-xs py-2">
+              <div className="p-3 rounded-xl bg-muted/40 border border-border/50 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Supervisor:</span>
+                  <span className="font-bold text-foreground">{payingClaim.staffName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Date:</span>
+                  <span className="font-semibold text-foreground">{payingClaim.date}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Site Assigned:</span>
+                  <span className="font-semibold text-foreground">{payingClaim.siteName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Claimed Purpose:</span>
+                  <span className="font-semibold text-foreground italic">{payingClaim.notes || 'No description'}</span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold">Disbursement Amount (₹)</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={payAmountInput}
+                  onChange={e => setPayAmountInput(e.target.value)}
+                  className="h-9 text-xs font-bold rounded-xl"
+                  placeholder="Enter amount to pay"
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  Original claimed: ₹{payingClaim.amount.toLocaleString()}
+                </span>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold">Payment Method</Label>
+                <Select value={payMethodInput} onValueChange={setPayMethodInput}>
+                  <SelectTrigger className="h-9 text-xs rounded-xl">
+                    <SelectValue placeholder="Mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Cash">💵 Cash</SelectItem>
+                    <SelectItem value="UPI">📱 UPI / GPay / PhonePe</SelectItem>
+                    <SelectItem value="Bank Transfer">🏦 Bank Transfer</SelectItem>
+                    <SelectItem value="Cheque">📝 Cheque</SelectItem>
+                    <SelectItem value="Card">💳 Card</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold">Payout Notes / Remarks</Label>
+                <Input
+                  value={payNotesInput}
+                  onChange={e => setPayNotesInput(e.target.value)}
+                  className="h-9 text-xs rounded-xl"
+                  placeholder="e.g. Approved petrol + site tea expenses"
+                />
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-800 dark:text-amber-300">
+                ⚡ Once confirmed, this amount will be immediately added to the <strong>Manual & Company Expense Report</strong> and booked to site finances.
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex gap-2 justify-end pt-2">
+            <Button variant="ghost" size="sm" onClick={() => setPayingClaim(null)} className="h-9 text-xs rounded-xl">
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleConfirmPay} className="h-9 px-4 text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs">
+              Confirm Payout & Add to Expense Report
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Claim Modal Dialog */}
+      <Dialog open={!!rejectingClaim} onOpenChange={(open) => !open && setRejectingClaim(null)}>
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base text-destructive">
+              <X className="w-5 h-5 text-destructive" /> Reject Expense Claim
+            </DialogTitle>
+          </DialogHeader>
+
+          {rejectingClaim && (
+            <div className="space-y-3 text-xs py-2">
+              <p className="text-muted-foreground">
+                Are you sure you want to reject this claim of <strong>₹{rejectingClaim.amount.toLocaleString()}</strong> from <strong>{rejectingClaim.staffName}</strong>? It will NOT be added to expense reports.
+              </p>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold">Reason for Rejection</Label>
+                <Input
+                  value={rejectionReasonInput}
+                  onChange={e => setRejectionReasonInput(e.target.value)}
+                  placeholder="e.g. Not approved / please submit bill receipt"
+                  className="h-9 text-xs rounded-xl"
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex gap-2 justify-end pt-2">
+            <Button variant="ghost" size="sm" onClick={() => setRejectingClaim(null)} className="h-9 text-xs rounded-xl">
+              Cancel
+            </Button>
+            <Button size="sm" variant="destructive" onClick={handleConfirmReject} className="h-9 px-4 text-xs font-bold rounded-xl">
+              Reject Claim
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

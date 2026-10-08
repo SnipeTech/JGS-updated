@@ -17,7 +17,11 @@ import { Staff, Attendance } from '@/types';
 import { getLabourTypeMeta } from '@/pages/Staff/StaffAttendanceTab';
 
 export const AttendanceTab = () => {
-  const { staffList, attendances, materialRequests, saveAttendance, currentUser, sites, dailyLogs, vehicles, labourTypes } = useApp();
+  const {
+    staffList, attendances, materialRequests, saveAttendance,
+    verifyAndPaySupervisorExpense, rejectSupervisorExpense,
+    currentUser, sites, dailyLogs, vehicles, labourTypes
+  } = useApp();
   const { t } = useTranslation();
   const [view, setView] = useState<'daily' | 'history'>('daily');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -966,25 +970,97 @@ export const AttendanceTab = () => {
                             </div>
 
                             {((att?.expenseAmount || 0) > 0 || att?.expenseNotes) ? (
-                              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border/30 text-xs">
-                                <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                                  <IndianRupee className="w-3 h-3 text-amber-500" /> Site Daily Expense:
-                                </span>
-                                <span className="font-bold text-amber-600 dark:text-amber-400">
-                                  ₹{(att?.expenseAmount || 0).toLocaleString()}
-                                </span>
-                                {att?.expenseNotes && (
-                                  <span className="text-muted-foreground italic">({att.expenseNotes})</span>
-                                )}
-                                {att?.siteId && (
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 shrink-0">
-                                    ✓ Saved on site
+                              <div className="p-2.5 rounded-xl bg-amber-500/[0.06] border border-amber-500/25 space-y-1.5 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                  <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                                    <IndianRupee className="w-3.5 h-3.5 text-amber-600" /> Supervisor Field Expense Claim:
                                   </span>
+
+                                  {/* Status Badge */}
+                                  <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border ${
+                                    att?.expenseStatus === 'paid'
+                                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                                      : att?.expenseStatus === 'rejected'
+                                        ? 'bg-destructive/15 text-destructive border-destructive/30'
+                                        : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                                  }`}>
+                                    {att?.expenseStatus === 'paid'
+                                      ? '✓ Paid & Added to Reports'
+                                      : att?.expenseStatus === 'rejected'
+                                        ? '❌ Rejected'
+                                        : '⏳ Pending Admin Review'}
+                                  </span>
+                                </div>
+
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <span className="font-heading font-extrabold text-sm text-foreground">
+                                      ₹{(att?.expenseStatus === 'paid' ? (att?.expensePaidAmount || att?.expenseAmount || 0) : (att?.expenseAmount || 0)).toLocaleString()}
+                                    </span>
+                                    {att?.expensePaymentMethod && (
+                                      <span className="text-[11px] text-muted-foreground ml-1.5 font-medium">
+                                        via {att.expensePaymentMethod}
+                                      </span>
+                                    )}
+                                    {att?.expenseNotes && (
+                                      <span className="text-muted-foreground italic ml-2">
+                                        ("{att.expenseNotes}")
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Quick Action buttons for Admin */}
+                                  <div className="flex items-center gap-1.5">
+                                    {att?.expenseStatus !== 'paid' && (
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={() => {
+                                          verifyAndPaySupervisorExpense(staff.id, date, {
+                                            paidAmount: att?.expenseAmount,
+                                            paymentMethod: att?.expensePaymentMethod || 'Cash',
+                                            notes: att?.expenseNotes
+                                          });
+                                          toast.success(`Supervisor expense of ₹${(att?.expenseAmount || 0).toLocaleString()} verified, paid, and added to the company expense report!`);
+                                        }}
+                                        className="h-7 px-2.5 text-[11px] font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs gap-1"
+                                      >
+                                        <CheckCircle2 className="w-3 h-3" /> Verify & Pay
+                                      </Button>
+                                    )}
+
+                                    {att?.expenseStatus === 'pending' && (
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                          rejectSupervisorExpense(staff.id, date, 'Rejected by Admin');
+                                          toast.info(`Claim rejected`);
+                                        }}
+                                        className="h-7 px-2 text-[11px] font-medium rounded-lg text-destructive border-destructive/30 hover:bg-destructive/10"
+                                      >
+                                        Reject
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {att?.expenseStatus === 'paid' && (
+                                  <p className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold pt-0.5">
+                                    ✓ Disbursed on {att.expensePaidAt || 'recently'} {att.expenseVerifiedBy ? `by ${att.expenseVerifiedBy}` : ''}
+                                  </p>
+                                )}
+
+                                {att?.expenseStatus === 'rejected' && att.expenseRejectionReason && (
+                                  <p className="text-[10px] text-destructive italic pt-0.5">
+                                    Reason: {att.expenseRejectionReason}
+                                  </p>
                                 )}
                               </div>
                             ) : (
                               <div className="text-[11px] text-muted-foreground pt-1 border-t border-border/30 italic">
-                                No site daily expenses logged.
+                                No supervisor expense claims logged for this date.
                               </div>
                             )}
                           </div>
@@ -1227,10 +1303,10 @@ export const AttendanceTab = () => {
                             )}
                           </div>
 
-                          {/* Site Daily Expense */}
+                          {/* Supervisor Field Expense Claim (Edit Mode) */}
                           <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border/30">
                             <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                              <IndianRupee className="w-3 h-3 text-amber-500" /> Site Daily Expense:
+                              <IndianRupee className="w-3 h-3 text-amber-500" /> Supervisor Field Expense Claim:
                             </span>
                             <div className="flex items-center gap-1">
                               <span className="text-xs text-muted-foreground font-bold">₹</span>
@@ -1239,21 +1315,48 @@ export const AttendanceTab = () => {
                                 min="0"
                                 placeholder="0"
                                 value={att?.expenseAmount !== undefined && att?.expenseAmount !== 0 ? att.expenseAmount : ''}
-                                onChange={e => handleAttendanceChange(staff.id, { expenseAmount: Number(e.target.value) || 0 })}
+                                onChange={e => handleAttendanceChange(staff.id, {
+                                  expenseAmount: Number(e.target.value) || 0,
+                                  expenseStatus: (Number(e.target.value) || 0) > 0 ? (att?.expenseStatus || 'pending') : undefined
+                                })}
                                 className="h-8 w-24 text-xs font-bold rounded-lg bg-card"
                               />
                             </div>
+
+                            <Select
+                              value={att?.expenseStatus || 'pending'}
+                              onValueChange={(val: any) => {
+                                if (val === 'paid') {
+                                  verifyAndPaySupervisorExpense(staff.id, date, {
+                                    paidAmount: att?.expenseAmount || 0,
+                                    paymentMethod: att?.expensePaymentMethod || 'Cash',
+                                    notes: att?.expenseNotes || ''
+                                  });
+                                  toast.success('Marked claim as Paid and added to expense report');
+                                } else if (val === 'rejected') {
+                                  rejectSupervisorExpense(staff.id, date, 'Rejected in edit mode');
+                                  toast.info('Claim marked as Rejected');
+                                } else {
+                                  handleAttendanceChange(staff.id, { expenseStatus: 'pending' });
+                                }
+                              }}
+                            >
+                              <SelectTrigger className="h-8 w-32 text-xs rounded-lg bg-card">
+                                <SelectValue placeholder="Status" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="pending">⏳ Pending Review</SelectItem>
+                                <SelectItem value="paid">✅ Paid & Report</SelectItem>
+                                <SelectItem value="rejected">❌ Rejected</SelectItem>
+                              </SelectContent>
+                            </Select>
+
                             <Input
-                              placeholder="Expense purpose (e.g. Travel, Materials, Refreshment)"
+                              placeholder="Claim remarks / purpose (e.g. Travel, tools, refreshments)"
                               value={att?.expenseNotes || ''}
                               onChange={e => handleAttendanceChange(staff.id, { expenseNotes: e.target.value })}
                               className="h-8 text-xs rounded-lg bg-card flex-1 min-w-[180px]"
                             />
-                            {att?.expenseAmount && att.expenseAmount > 0 && att?.siteId && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 shrink-0">
-                                ✓ Saved on {sites.find(s => s.id === att.siteId)?.name || 'site'}
-                              </span>
-                            )}
                           </div>
                         </div>
 

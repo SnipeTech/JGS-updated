@@ -13,7 +13,7 @@ import {
   Plus, MapPin, Users, TrendingUp, TrendingDown, IndianRupee,
   Building2, CheckCircle2, Clock, Send, Truck, Package,
   CalendarDays, Banknote, ArrowRightLeft, AlertCircle, Layers, UserCircle, Trash2, FileDown,
-  Receipt, FileText, ChevronDown, ChevronUp, RefreshCw, PenLine, Wallet
+  Receipt, FileText, ChevronDown, ChevronUp, RefreshCw, PenLine, Wallet, Warehouse
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Material, MaterialRequest, MaterialRental, Site } from '@/types';
@@ -43,7 +43,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     materialRequests, materialSettings, suppliers, vehicles, assignMaterialRequest, completeMaterialRequest, addMaterialRequest, paymentStageMaster,
     materialRentals, addMaterialRental, updateMaterialRental, deleteMaterialRental,
     stageCompletionRequests, updateStageCompletionRequest,
-    manualExpenses
+    manualExpenses, storeRoomDispatches
   } = useApp();
   const fallbackSite: Site = useMemo(() => ({
     id: siteId,
@@ -100,6 +100,15 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     }
     return list;
   }, [siteRentals, activeSiteRentals, returnedSiteRentals, siteRentalFilter, siteRentalSearch]);
+
+  const siteStoreRoomDispatches = useMemo(() => {
+    return (storeRoomDispatches || [])
+      .filter(d => 
+        (d.siteId && (d.siteId === siteId || String(d.siteId) === String(siteId))) ||
+        (site?.name && d.siteName && d.siteName.trim().toLowerCase() === site.name.trim().toLowerCase())
+      )
+      .sort((a, b) => new Date((b.deliveryDate || b.startDate || b.date || today) + 'T00:00:00').getTime() - new Date((a.deliveryDate || a.startDate || a.date || today) + 'T00:00:00').getTime());
+  }, [storeRoomDispatches, siteId, site?.name, today]);
 
   // Site Rental Deploy Modal State
   const [showDeployRental, setShowDeployRental] = useState(false);
@@ -677,10 +686,10 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         if (a.siteId === siteId) {
           const s = staffList.find(st => st.id === a.staffId);
           const staffName = s ? s.name : a.staffName || 'Supervisor';
-          if (a.expenseAmount && a.expenseAmount > 0) {
+          if (a.expenseAmount && a.expenseAmount > 0 && a.expenseStatus === 'paid') {
             miscExpensesList.push({
               itemName: a.expenseNotes ? `Attendance Expense: ${a.expenseNotes}` : 'Supervisor Attendance Expense',
-              amount: a.expenseAmount,
+              amount: a.expensePaidAmount || a.expenseAmount,
               staffName: staffName
             });
           }
@@ -834,10 +843,55 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       (sum, l) => sum + (l.materials || []).reduce((s, m) => s + (m.cost || 0) * (m.quantity || 0), 0),
       0
     );
-    const reqMaterialCost = (materialRequests || [])
-      .filter(r => r.siteId === siteId && (r.status === 'completed' || r.status === 'assigned'))
+
+    // External supplier orders (excluding central store room to prevent duplication)
+    const supplierReqCost = (materialRequests || [])
+      .filter(r => r.siteId === siteId && (r.status === 'completed' || r.status === 'assigned') && !r.isStoreRoom && r.sourceType !== 'store_room')
       .reduce((sum, r) => sum + (r.materialCost || r.supplierPrice || 0), 0);
-    const totalMaterialExpense = logMaterialCost + reqMaterialCost;
+
+    // Store Room Equipment & Materials deployed or billed to this site
+    const siteStoreRoomDispatches = (storeRoomDispatches || []).filter(d => 
+      (d.siteId && (d.siteId === siteId || String(d.siteId) === String(siteId))) ||
+      (site?.name && d.siteName && d.siteName.trim().toLowerCase() === site.name.trim().toLowerCase())
+    );
+
+    const storeRoomDispatchAmount = siteStoreRoomDispatches.reduce((sum, d) => {
+      if (d.status === 'returned' || (d.storeRoomAmount !== undefined && d.storeRoomAmount > 0)) {
+        return sum + (Number(d.storeRoomAmount) || Number(d.storeRoomProfit) || 0);
+      }
+      // If actively deployed on site, calculate accumulated usage fee if perDayRate is configured
+      if (d.perDayRate && d.perDayRate > 0) {
+        const sDate = d.deliveryDate || d.startDate || d.date || today;
+        let days = 1;
+        try {
+          const s = new Date(sDate);
+          const now = new Date();
+          if (!isNaN(s.getTime())) {
+            days = Math.max(1, Math.ceil((now.getTime() - s.getTime()) / 86400000));
+          }
+        } catch {
+          days = 1;
+        }
+        return sum + (days * (Number(d.quantity) || 1) * Number(d.perDayRate));
+      }
+      return sum;
+    }, 0);
+
+    const storeRoomReqAmount = (materialRequests || [])
+      .filter(r => r.siteId === siteId && (r.status === 'completed' || r.status === 'assigned') && (r.isStoreRoom || r.sourceType === 'store_room') && !siteStoreRoomDispatches.some(d => d.id === r.id))
+      .reduce((sum, r) => sum + (Number(r.storeRoomAmount) || Number(r.materialCost) || Number(r.supplierPrice) || 0), 0);
+
+    const storeRoomManualExpenses = (manualExpenses || [])
+      .filter(e => (e.siteId === siteId || (site?.name && e.siteName && e.siteName.trim().toLowerCase() === site.name.trim().toLowerCase())) && e.category === 'Store Room Equipment & Materials')
+      .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+    // Store Room total expense for this site (preventing double counting between dispatch, request and manualExpense)
+    const totalStoreRoomExpense = Math.max(
+      storeRoomDispatchAmount + storeRoomReqAmount,
+      storeRoomManualExpenses
+    );
+
+    const totalMaterialExpense = logMaterialCost + supplierReqCost + totalStoreRoomExpense;
 
     const logTransportCost = siteLogsAll.reduce((sum, l) => sum + (l.transportCost || 0), 0);
     const reqTransportCost = (materialRequests || [])
@@ -851,16 +905,20 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     );
 
     const attendanceMiscExpense = (attendances || [])
-      .filter(a => a.siteId === siteId && a.status !== 'absent')
+      .filter(a => a.siteId === siteId && a.status !== 'absent' && a.expenseStatus === 'paid')
       .reduce((sum, a) => {
-        let amt = a.expenseAmount || 0;
+        let amt = a.expensePaidAmount || a.expenseAmount || 0;
         if (a.expenses && Array.isArray(a.expenses)) {
           amt += a.expenses.reduce((s, e) => s + (e.amount || 0), 0);
         }
         return sum + amt;
       }, 0);
 
-    const totalMiscExpense = logMiscExpense + attendanceMiscExpense;
+    const otherSiteManualExpenses = (manualExpenses || [])
+      .filter(e => (e.siteId === siteId || (site?.name && e.siteName && e.siteName.trim().toLowerCase() === site.name.trim().toLowerCase())) && e.category !== 'Store Room Equipment & Materials' && !e.id?.startsWith('att_exp_'))
+      .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+    const totalMiscExpense = logMiscExpense + attendanceMiscExpense + otherSiteManualExpenses;
 
     const totalRentalExpense = (materialRentals || [])
       .filter(r => isRentalForSite(r))
@@ -960,6 +1018,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       incomeLogs: allIncomeLogs,
       totalIncomeGiven,
       totalMaterialExpense,
+      totalStoreRoomExpense,
       totalTransportExpense,
       totalRentalExpense,
       totalMiscExpense,
@@ -967,7 +1026,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
       totalSiteExpense,
       netBalance
     };
-  }, [siteLogsAll, materialRequests, materialRentals, siteId, site?.paymentStages, site?.supervisorId, staffList, attendances]);
+  }, [siteLogsAll, materialRequests, materialRentals, siteId, site?.paymentStages, site?.supervisorId, staffList, attendances, storeRoomDispatches, manualExpenses]);
 
   const downloadSiteFinancialPDF = () => {
     if (!site) return;
@@ -990,33 +1049,35 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
     // Summary Box
     doc.setDrawColor(220, 220, 220);
     doc.setFillColor(248, 248, 248);
-    doc.roundedRect(14, 44, 182, 44, 2, 2, 'FD');
+    doc.roundedRect(14, 44, 182, 48, 2, 2, 'FD');
 
     const startY = 46;
     doc.setFontSize(9);
     doc.setTextColor(40);
     doc.text(`Client Income Received: Rs ${siteFinancials.totalIncomeGiven.toLocaleString()} (${siteFinancials.incomeLogs.length} logs)`, 20, startY + 6);
     doc.text(`Total Site Expenses: Rs ${siteFinancials.totalSiteExpense.toLocaleString()} (All operational costs)`, 20, startY + 12);
-    doc.text(`- Materials: Rs ${siteFinancials.totalMaterialExpense.toLocaleString()}`, 25, startY + 17);
-    doc.text(`- Staff Wages & Crew Payroll: Rs ${siteFinancials.totalLabourExpense.toLocaleString()}`, 25, startY + 21);
-    doc.text(`- Transport & Driver: Rs ${siteFinancials.totalTransportExpense.toLocaleString()}`, 25, startY + 25);
-    doc.text(`- Rental Products & Scaffolding: Rs ${siteFinancials.totalRentalExpense.toLocaleString()}`, 25, startY + 29);
-    doc.text(`- Incidentals / Tea / Misc: Rs ${siteFinancials.totalMiscExpense.toLocaleString()}`, 25, startY + 33);
+    doc.text(`- Materials (Supplier/Logs): Rs ${(siteFinancials.totalMaterialExpense - (siteFinancials.totalStoreRoomExpense || 0)).toLocaleString()}`, 25, startY + 17);
+    doc.text(`- Store Room Materials & Tools: Rs ${(siteFinancials.totalStoreRoomExpense || 0).toLocaleString()}`, 25, startY + 21);
+    doc.text(`- Staff Wages & Crew Payroll: Rs ${siteFinancials.totalLabourExpense.toLocaleString()}`, 25, startY + 25);
+    doc.text(`- Transport & Driver: Rs ${siteFinancials.totalTransportExpense.toLocaleString()}`, 25, startY + 29);
+    doc.text(`- Rental Products & Scaffolding: Rs ${siteFinancials.totalRentalExpense.toLocaleString()}`, 25, startY + 33);
+    doc.text(`- Incidentals / Tea / Misc: Rs ${siteFinancials.totalMiscExpense.toLocaleString()}`, 25, startY + 37);
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     if (siteFinancials.netBalance >= 0) {
       doc.setTextColor(6, 95, 70);
-      doc.text(`Net In-Hand Balance: +Rs ${siteFinancials.netBalance.toLocaleString()} (Surplus)`, 20, startY + 40);
+      doc.text(`Net In-Hand Balance: +Rs ${siteFinancials.netBalance.toLocaleString()} (Surplus)`, 20, startY + 44);
     } else {
       doc.setTextColor(153, 27, 27);
-      doc.text(`Net Overspent / Due: -Rs ${Math.abs(siteFinancials.netBalance).toLocaleString()} (Due from Client)`, 20, startY + 40);
+      doc.text(`Net Overspent / Due: -Rs ${Math.abs(siteFinancials.netBalance).toLocaleString()} (Due from Client)`, 20, startY + 44);
     }
 
     // Expense Breakdown Table
     const expHead = [['Category', 'Amount (Rs)', 'Notes']];
     const expBody = [
-      ['Materials Expense', siteFinancials.totalMaterialExpense.toLocaleString(), 'Site daily logs + dispatch requisitions'],
+      ['Materials Expense', (siteFinancials.totalMaterialExpense - (siteFinancials.totalStoreRoomExpense || 0)).toLocaleString(), 'Site daily logs + vendor orders'],
+      ['Store Room Materials & Tools', (siteFinancials.totalStoreRoomExpense || 0).toLocaleString(), 'Warehouse inventory deployed & billed to site'],
       ['Staff Wages & Crew Payroll', siteFinancials.totalLabourExpense.toLocaleString(), 'Supervisor salary, driver transit & site crew team wages'],
       ['Transport & Vehicle Expense', siteFinancials.totalTransportExpense.toLocaleString(), 'Staff travel + driver transit & petrol'],
       ['Rental Equipment & Products', siteFinancials.totalRentalExpense.toLocaleString(), 'Scaffolding, machines & rental items deployed to site'],
@@ -1449,10 +1510,16 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
         </div>
 
         {/* Expense Category Breakdown Pills */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-border/30 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-2 border-t border-border/30 text-xs">
           <div className="flex justify-between items-center p-2 rounded-lg bg-muted/40 border border-border/40">
             <span className="text-muted-foreground">🧱 Materials:</span>
-            <strong className="text-foreground font-mono">₹{siteFinancials.totalMaterialExpense.toLocaleString()}</strong>
+            <strong className="text-foreground font-mono">₹{(siteFinancials.totalMaterialExpense - (siteFinancials.totalStoreRoomExpense || 0)).toLocaleString()}</strong>
+          </div>
+          <div className="flex justify-between items-center p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            <span className="text-emerald-800 dark:text-emerald-300 font-semibold flex items-center gap-1">
+              <Warehouse className="w-3 h-3 text-emerald-600" /> Store Room:
+            </span>
+            <strong className="text-emerald-700 dark:text-emerald-400 font-mono">₹{(siteFinancials.totalStoreRoomExpense || 0).toLocaleString()}</strong>
           </div>
           <div className="flex justify-between items-center p-2 rounded-lg bg-purple-500/10 border border-purple-500/20">
             <span className="text-purple-800 dark:text-purple-300 font-semibold flex items-center gap-1">
@@ -1658,6 +1725,11 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
                     {/* Logistics & Supplier Meta */}
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground pt-1 border-t border-border/30">
+                      {(req.isStoreRoom || req.sourceType === 'store_room') && (
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                          <Warehouse className="w-3 h-3" /> Central Store Room / Warehouse
+                        </span>
+                      )}
                       {req.supplierName && (
                         <span>🏢 Supplier: <strong className="text-foreground">{req.supplierName}</strong></span>
                       )}
@@ -1671,48 +1743,170 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
                         <span>🚗 Vehicle: <strong className="text-foreground">{req.vehicleName}</strong></span>
                       )}
                     </div>
-                      {req.supplierPrice !== undefined ? (
-                        <div className="w-full mt-2 border-t border-border/40 pt-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-[11px] font-black text-foreground uppercase tracking-wider">Site Total Bill</span>
-                            <span className="font-bold text-primary text-sm font-mono">₹{req.supplierPrice.toLocaleString()}</span>
-                          </div>
-                          
-                          <div className="p-3 bg-muted/30 rounded-xl border border-border/50 space-y-1.5 text-[11px]">
+
+                    {(req.supplierPrice !== undefined || req.storeRoomAmount !== undefined || (req.isStoreRoom && req.materialCost !== undefined)) ? (
+                      <div className="w-full mt-2 border-t border-border/40 pt-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[11px] font-black text-foreground uppercase tracking-wider flex items-center gap-1">
+                            {req.isStoreRoom || req.sourceType === 'store_room' ? (
+                              <>
+                                <Warehouse className="w-3.5 h-3.5 text-emerald-600" />
+                                Store Room Billed to Site
+                              </>
+                            ) : 'Site Total Bill'}
+                          </span>
+                          <span className={`font-bold text-sm font-mono ${req.isStoreRoom || req.sourceType === 'store_room' ? 'text-emerald-600 dark:text-emerald-400' : 'text-primary'}`}>
+                            ₹{(req.storeRoomAmount ?? req.supplierPrice ?? req.materialCost ?? 0).toLocaleString()}
+                          </span>
+                        </div>
+                        
+                        <div className="p-3 bg-muted/30 rounded-xl border border-border/50 space-y-1.5 text-[11px]">
+                          {req.isStoreRoom || req.sourceType === 'store_room' ? (
+                            <div className="flex justify-between items-center text-muted-foreground">
+                              <span>Warehouse Item / Usage Value:</span>
+                              <span className="font-mono font-semibold text-foreground">
+                                ₹{(req.storeRoomAmount ?? req.materialCost ?? 0).toLocaleString()}
+                              </span>
+                            </div>
+                          ) : (
                             <div className="flex justify-between items-center text-muted-foreground">
                               <span>Material Subtotal:</span>
                               <span className="font-mono font-semibold text-foreground">
                                 ₹{((req.supplierPrice || 0) - (req.gstAmount || 0)).toLocaleString()}
                               </span>
                             </div>
-                            
-                            {(req.gstAmount || 0) > 0 && (
-                              req.gstType === 'inter-state' ? (
+                          )}
+                          
+                          {(req.gstAmount || 0) > 0 && !(req.isStoreRoom || req.sourceType === 'store_room') && (
+                            req.gstType === 'inter-state' ? (
+                              <div className="flex justify-between items-center text-muted-foreground">
+                                <span>IGST ({req.igstRate || 0}%):</span>
+                                <span className="font-mono font-semibold text-foreground">₹{req.gstAmount?.toLocaleString()}</span>
+                              </div>
+                            ) : (
+                              <>
                                 <div className="flex justify-between items-center text-muted-foreground">
-                                  <span>IGST ({req.igstRate || 0}%):</span>
-                                  <span className="font-mono font-semibold text-foreground">₹{req.gstAmount?.toLocaleString()}</span>
+                                  <span>CGST ({req.cgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                  <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
                                 </div>
-                              ) : (
-                                <>
-                                  <div className="flex justify-between items-center text-muted-foreground">
-                                    <span>CGST ({req.cgstRate || ((req.igstRate || 0) / 2)}%):</span>
-                                    <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
-                                  </div>
-                                  <div className="flex justify-between items-center text-muted-foreground">
-                                    <span>SGST ({req.sgstRate || ((req.igstRate || 0) / 2)}%):</span>
-                                    <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
-                                  </div>
-                                </>
-                              )
-                            )}
-                          </div>
+                                <div className="flex justify-between items-center text-muted-foreground">
+                                  <span>SGST ({req.sgstRate || ((req.igstRate || 0) / 2)}%):</span>
+                                  <span className="font-mono font-semibold text-foreground">₹{((req.gstAmount || 0) / 2).toLocaleString()}</span>
+                                </div>
+                              </>
+                            )
+                          )}
                         </div>
-                      ) : null}
+                      </div>
+                    ) : null}
 
                     {req.notes && (
                       <p className="text-[11px] text-muted-foreground italic bg-muted/40 px-2.5 py-1 rounded-lg">
                         "{req.notes}"
                       </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* 3. Central Store Room Inventory & Equipment Deployed on Site */}
+        <div className="space-y-2 pt-3 border-t border-border/40">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <Warehouse className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              Central Store Room Items on Site ({siteStoreRoomDispatches.length})
+            </span>
+            {(siteFinancials.totalStoreRoomExpense || 0) > 0 && (
+              <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 font-mono">
+                Total Billed / Active: ₹{(siteFinancials.totalStoreRoomExpense || 0).toLocaleString()}
+              </span>
+            )}
+          </div>
+
+          {siteStoreRoomDispatches.length === 0 ? (
+            <div className="p-3 rounded-xl bg-muted/20 border border-border/40 text-xs text-muted-foreground italic flex items-center gap-2">
+              <Warehouse className="w-4 h-4 text-muted-foreground/60 shrink-0" />
+              <span>No Store Room materials or equipment deployed to this site yet.</span>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+              {siteStoreRoomDispatches.map(record => {
+                const isReturned = record.status === 'returned';
+                const sDate = record.deliveryDate || record.startDate || record.date || today;
+                let days = record.totalDays || 1;
+                if (!isReturned) {
+                  try {
+                    const s = new Date(sDate);
+                    const now = new Date();
+                    if (!isNaN(s.getTime())) {
+                      days = Math.max(1, Math.ceil((now.getTime() - s.getTime()) / 86400000));
+                    }
+                  } catch {
+                    days = 1;
+                  }
+                }
+                const billedVal = Number(record.storeRoomAmount) || Number(record.storeRoomProfit) || ((record.perDayRate || 0) * days * (record.quantity || 1));
+
+                return (
+                  <div
+                    key={record.id}
+                    className={`p-3 rounded-2xl border text-xs space-y-2 ${
+                      isReturned ? 'bg-card border-border/60' : 'bg-emerald-500/5 border-emerald-500/30'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                          isReturned
+                            ? 'bg-muted text-muted-foreground'
+                            : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                        }`}>
+                          <Warehouse className="w-3 h-3" />
+                          {isReturned ? (record.destinationType === 'other_site' ? 'Transferred to Other Site' : 'Returned to Warehouse') : 'Active on Site'}
+                        </span>
+                        <span className="font-bold text-foreground text-sm">
+                          {record.materialName}
+                        </span>
+                        <span className="text-primary font-mono font-bold">
+                          ({record.quantity} {record.unit})
+                        </span>
+                      </div>
+
+                      {billedVal > 0 && (
+                        <div className="text-right">
+                          <span className="text-[10px] text-muted-foreground mr-1">{isReturned ? 'Billed to Site:' : 'Current Cost:'}</span>
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono text-xs">
+                            ₹{billedVal.toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-muted-foreground bg-muted/20 p-2 rounded-xl">
+                      <div>
+                        <span>Delivered / Start:</span> <strong className="text-foreground">{record.deliveryDate || record.startDate || record.date}</strong>
+                      </div>
+                      <div>
+                        <span>Duration:</span> <strong className="text-foreground">{days} {days === 1 ? 'day' : 'days'}</strong>
+                      </div>
+                      <div>
+                        <span>Daily Rate:</span> <strong className="text-foreground">{record.perDayRate ? `₹${record.perDayRate}/${record.unit}/day` : 'N/A'}</strong>
+                      </div>
+                      <div>
+                        <span>{isReturned ? 'Return / Transfer Date:' : 'Status:'}</span>{' '}
+                        <strong className="text-foreground">{isReturned ? (record.returnDate || 'Completed') : 'In Use'}</strong>
+                      </div>
+                    </div>
+
+                    {(record.driverName || record.vehicleNumber || record.notes) && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+                        {record.driverName && <span>👤 Driver: <strong className="text-foreground">{record.driverName}</strong></span>}
+                        {record.vehicleNumber && <span>🚛 Vehicle: <strong className="text-foreground">{record.vehicleNumber}</strong></span>}
+                        {record.notes && <span className="italic">Notes: {record.notes}</span>}
+                      </div>
                     )}
                   </div>
                 );
@@ -3381,7 +3575,7 @@ export const SiteDetailView = ({ siteId, onBack }: { siteId: string; onBack: () 
 
 // ── Sites Tab Main Component ──────────────────────────────
 export const SitesTab = () => {
-  const { sites, addSite, customers, addCustomer, staffList, materialRequests, materialRentals, stageCompletionRequests, dailyLogs } = useApp();
+  const { sites, addSite, customers, addCustomer, staffList, materialRequests, materialRentals, stageCompletionRequests, dailyLogs, storeRoomDispatches = [] } = useApp();
   const { t } = useTranslation();
   const today = format(new Date(), 'yyyy-MM-dd');
   const [name, setName] = useState('');
@@ -3898,6 +4092,24 @@ export const SitesTab = () => {
                                 {activeCount > 0
                                   ? `${activeCount} active rental${activeCount > 1 ? 's' : ''}`
                                   : `${sRentals.length} rental${sRentals.length > 1 ? 's' : ''} (₹${totalCost.toLocaleString()})`
+                                }
+                              </span>
+                            );
+                          })()}
+                          {(() => {
+                            const sStoreItems = (storeRoomDispatches || []).filter(d => 
+                              (d.siteId && (d.siteId === s.id || String(d.siteId) === String(s.id))) ||
+                              (d.siteName && s.name && d.siteName.trim().toLowerCase() === s.name.trim().toLowerCase())
+                            );
+                            if (sStoreItems.length === 0) return null;
+                            const activeCount = sStoreItems.filter(d => d.status !== 'returned').length;
+                            const billedTotal = sStoreItems.filter(d => d.status === 'returned').reduce((sum, d) => sum + (Number(d.storeRoomAmount) || Number(d.storeRoomProfit) || 0), 0);
+                            return (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
+                                <Warehouse className="w-3 h-3" />
+                                {activeCount > 0
+                                  ? `${activeCount} store room active`
+                                  : `${sStoreItems.length} store items (₹${billedTotal.toLocaleString()})`
                                 }
                               </span>
                             );

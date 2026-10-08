@@ -161,6 +161,12 @@ class Attendance(models.Model):
     expense_amount = models.FloatField(default=0)
     expense_notes = models.TextField(blank=True, default='')
     expense_payment_method = models.CharField(max_length=50, blank=True, default='')
+    expense_status = models.CharField(max_length=50, blank=True, default='pending')
+    expense_verified_by = models.CharField(max_length=150, blank=True, default='')
+    expense_verified_at = models.CharField(max_length=50, blank=True, default='')
+    expense_paid_at = models.CharField(max_length=50, blank=True, default='')
+    expense_paid_amount = models.FloatField(default=0)
+    expense_rejection_reason = models.TextField(blank=True, default='')
     expenses = models.JSONField(default=list, blank=True)
     present_counts = models.JSONField(default=dict, blank=True)
     half_day_counts = models.JSONField(default=dict, blank=True)
@@ -181,6 +187,12 @@ class MaterialSetting(models.Model):
     default_rate = models.FloatField(default=0)
     is_rental = models.BooleanField(default=False)
     rental_rate_per_day = models.FloatField(default=0)
+    is_store_room = models.BooleanField(default=False)
+    stock_quantity = models.FloatField(default=0)
+    min_stock_alert = models.FloatField(default=10)
+    store_room_location = models.CharField(max_length=150, blank=True, default='')
+    buying_price = models.FloatField(default=0)
+    total_purchase_cost = models.FloatField(default=0)
 
     def __str__(self):
         return self.name
@@ -208,6 +220,41 @@ class MaterialRental(models.Model):
     status = models.CharField(max_length=50, default='active')
     notes = models.TextField(blank=True, default='')
     created_at = models.CharField(max_length=50, blank=True, default='')
+
+
+class StoreRoomDispatch(models.Model):
+    id = models.CharField(max_length=64, primary_key=True, default=generate_str_id)
+    material_id = models.CharField(max_length=64, blank=True, default='')
+    material_name = models.CharField(max_length=150, blank=True, default='')
+    quantity = models.FloatField(default=0)
+    unit = models.CharField(max_length=50, blank=True, default='')
+    site_id = models.CharField(max_length=64, blank=True, default='')
+    site_name = models.CharField(max_length=200, blank=True, default='')
+    work_level_stage = models.CharField(max_length=150, blank=True, default='')
+    dispatch_date = models.CharField(max_length=50, blank=True, default='')
+    dispatch_time = models.CharField(max_length=50, blank=True, default='')
+    start_date = models.CharField(max_length=50, blank=True, default='')
+    delivery_date = models.CharField(max_length=50, blank=True, default='')
+    return_date = models.CharField(max_length=50, blank=True, default='')
+    driver_id = models.CharField(max_length=64, blank=True, default='')
+    driver_name = models.CharField(max_length=150, blank=True, default='')
+    vehicle_id = models.CharField(max_length=64, blank=True, default='')
+    vehicle_number = models.CharField(max_length=50, blank=True, default='')
+    transit_cost = models.FloatField(default=0)
+    per_day_rate = models.FloatField(default=0)
+    total_days = models.IntegerField(default=0)
+    store_room_amount = models.FloatField(default=0)
+    store_room_profit = models.FloatField(default=0)
+    destination_type = models.CharField(max_length=50, blank=True, default='')
+    transfer_to_site_id = models.CharField(max_length=64, blank=True, default='')
+    transfer_to_site_name = models.CharField(max_length=200, blank=True, default='')
+    dispatched_by = models.CharField(max_length=150, blank=True, default='')
+    status = models.CharField(max_length=50, default='active')
+    notes = models.TextField(blank=True, default='')
+    created_at = models.CharField(max_length=50, blank=True, default='')
+
+    def __str__(self):
+        return f'{self.material_name} to {self.site_name}'
 
 
 class Supplier(models.Model):
@@ -280,6 +327,11 @@ class MaterialRequest(models.Model):
     source_type = models.CharField(max_length=50, blank=True, default='')
     source_site_id = models.CharField(max_length=64, blank=True, default='')
     source_site_name = models.CharField(max_length=200, blank=True, default='')
+    is_store_room = models.BooleanField(default=False)
+    delivery_date = models.CharField(max_length=50, blank=True, default='')
+    return_date = models.CharField(max_length=50, blank=True, default='')
+    store_room_amount = models.FloatField(default=0)
+    store_room_profit = models.FloatField(default=0)
 
     driver_id = models.CharField(max_length=64, blank=True, default='')
     driver_name = models.CharField(max_length=150, blank=True, default='')

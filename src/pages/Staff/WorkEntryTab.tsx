@@ -12,7 +12,7 @@ import {
   Send, MapPin, Users, Package, Clock, Plus, Trash2,
   Bike, Bus, Car, Footprints, AlertCircle, Search, Sparkles,
   Layers, CheckCircle2, SendHorizonal, Lock, Unlock, ShieldCheck, ArrowRight,
-  PenLine, X, IndianRupee, UserCheck
+  PenLine, X, IndianRupee, UserCheck, ChevronDown, ChevronUp, History, Building2
 } from 'lucide-react';
 import { Material, TransportMode, TRANSPORT_RATES, Site, Staff } from '@/types';
 import { getLabourTypeMeta } from './StaffAttendanceTab';
@@ -48,12 +48,34 @@ export const WorkEntryTab = ({
   const isSelfPresent = myAtt?.status === 'present' || myAtt?.status === 'half-day';
   const availableCrew = (myAtt?.presentCounts || {}) as Record<string, number>;
 
+  // Set of site IDs specifically assigned to this supervisor
+  const assignedSiteIdSet = useMemo(() => {
+    return new Set(mySites.map(s => s.id));
+  }, [mySites]);
+
+  // All sites available to view and log work entries for, prioritizing attendance active site and assigned sites
+  const allAvailableSites = useMemo(() => {
+    return [...sites].sort((a, b) => {
+      if (myAtt?.siteId && a.id === myAtt.siteId) return -1;
+      if (myAtt?.siteId && b.id === myAtt.siteId) return 1;
+      const aAssigned = assignedSiteIdSet.has(a.id);
+      const bAssigned = assignedSiteIdSet.has(b.id);
+      if (aAssigned && !bAssigned) return -1;
+      if (!aAssigned && bAssigned) return 1;
+      if (a.status === 'active' && b.status !== 'active') return -1;
+      if (a.status !== 'active' && b.status === 'active') return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [sites, assignedSiteIdSet, myAtt?.siteId]);
+
   const defaultSiteId = useMemo(() => {
-    return myAtt?.siteId || localStorage.getItem('today_active_site_id') || (mySites.length > 0 ? mySites[0].id : '');
-  }, [myAtt?.siteId, mySites]);
+    return myAtt?.siteId || localStorage.getItem('today_active_site_id') || (mySites.length > 0 ? mySites[0].id : (allAvailableSites.length > 0 ? allAvailableSites[0].id : ''));
+  }, [myAtt?.siteId, mySites, allAvailableSites]);
 
   const [siteId, setSiteId] = useState(defaultSiteId);
   const [siteSearch, setSiteSearch] = useState('');
+  const [siteFilterScope, setSiteFilterScope] = useState<'all' | 'assigned' | 'active'>('all');
+  const [showRecentSiteLogs, setShowRecentSiteLogs] = useState(false);
   const [customSiteMode, setCustomSiteMode] = useState(false);
   const [customSiteName, setCustomSiteName] = useState('');
   const [visitReason, setVisitReason] = useState('');
@@ -116,17 +138,44 @@ export const WorkEntryTab = ({
     setEditingLogId(null);
   };
 
-  // Auto-sync siteId to supervisor's attendance assigned site for today
+  // Initialize siteId once on mount if empty (prevent forcing back when user selects another site)
   useEffect(() => {
-    const attSite = myAtt?.siteId || localStorage.getItem('today_active_site_id');
-    if (attSite && !editingLogId) {
-      if (siteId !== attSite) {
+    if (!siteId) {
+      const attSite = myAtt?.siteId || localStorage.getItem('today_active_site_id');
+      if (attSite) {
         setSiteId(attSite);
+      } else if (defaultSiteId) {
+        setSiteId(defaultSiteId);
       }
-    } else if (!siteId && defaultSiteId) {
-      setSiteId(defaultSiteId);
     }
-  }, [myAtt?.siteId, defaultSiteId, editingLogId]);
+  }, [myAtt?.siteId, defaultSiteId, siteId]);
+
+  const displayedSites = useMemo(() => {
+    let list = allAvailableSites;
+    if (siteFilterScope === 'assigned' && mySites.length > 0) {
+      list = list.filter(s => assignedSiteIdSet.has(s.id));
+    } else if (siteFilterScope === 'active') {
+      list = list.filter(s => s.status === 'active');
+    }
+    if (siteSearch.trim()) {
+      const q = siteSearch.toLowerCase().trim();
+      list = list.filter(s =>
+        s.name.toLowerCase().includes(q) ||
+        (s.clientName && s.clientName.toLowerCase().includes(q)) ||
+        (s.address && s.address.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [allAvailableSites, siteFilterScope, mySites, assignedSiteIdSet, siteSearch]);
+
+  // Previous work entries logged for the currently selected site
+  const siteRecentLogs = useMemo(() => {
+    if (!siteId || customSiteMode) return [];
+    return (dailyLogs || [])
+      .filter(l => l.siteId === siteId)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 5);
+  }, [dailyLogs, siteId, customSiteMode]);
 
   // Effective supervisor attendance (handles both supervisor logged in or staff under a supervisor)
   const effectiveSupervisorAtt = useMemo(() => {
@@ -282,34 +331,6 @@ export const WorkEntryTab = ({
 
   // Selected site object
   const selectedSite = useMemo(() => sites.find(s => s.id === siteId), [sites, siteId]);
-
-  // Supervisor attendance site expense for this site (from Team Attendance)
-  const supervisorExpense = useMemo(() => {
-    // 1. Direct match: supervisor assigned this site today in Team Attendance
-    const isThisSite = (effectiveSupervisorAtt?.siteId === siteId) ||
-      (effectiveSupervisorAtt?.siteAssignments?.some(sa => sa.siteId === siteId));
-
-    if (isThisSite && (effectiveSupervisorAtt?.expenseAmount || 0) > 0) {
-      return {
-        amount: Number(effectiveSupervisorAtt?.expenseAmount) || 0,
-        notes: effectiveSupervisorAtt?.expenseNotes || 'Supervisor Attendance Expense',
-        method: effectiveSupervisorAtt?.expensePaymentMethod || 'Cash'
-      };
-    }
-
-    // 2. Also check if any attendance for today assigned this site with expense
-    for (const a of todayAttendances) {
-      if (a.siteId === siteId && (a.expenseAmount || 0) > 0) {
-        return {
-          amount: Number(a.expenseAmount) || 0,
-          notes: a.expenseNotes || 'Supervisor Attendance Expense',
-          method: a.expensePaymentMethod || 'Cash'
-        };
-      }
-    }
-
-    return null;
-  }, [effectiveSupervisorAtt, siteId, selectedSite, staff?.id, todayAttendances]);
 
   // Supervisor daily salary for this site based on today's Team Attendance
   const supervisorSalaryInfo = useMemo(() => {
@@ -524,18 +545,8 @@ export const WorkEntryTab = ({
 
   // Pure site expenses for today's log overview (excluding supervisor salary)
   const todaySiteExpenses = useMemo(() => {
-    const list = (todayLog?.expenses || []).filter(e => !e.itemName?.toLowerCase().includes('supervisor salary'));
-    if (supervisorExpense && supervisorExpense.amount > 0) {
-      const exists = list.some(e => e.itemName.includes('Supervisor Attendance Expense'));
-      if (!exists) {
-        list.unshift({
-          itemName: `Supervisor Attendance Expense (${supervisorExpense.notes})`,
-          amount: supervisorExpense.amount
-        });
-      }
-    }
-    return list;
-  }, [todayLog?.expenses, supervisorExpense]);
+    return (todayLog?.expenses || []).filter(e => !e.itemName?.toLowerCase().includes('supervisor salary'));
+  }, [todayLog?.expenses]);
 
   const totalTodaySiteExpenses = useMemo(() => {
     return todaySiteExpenses.reduce((s, e) => s + (e.amount || 0), 0) + (todayLog?.transportCost || 0);
@@ -654,15 +665,6 @@ export const WorkEntryTab = ({
 
     // Pure site expenses from form (cleanly separated from supervisor salary)
     const finalExpenses = [...expenses].filter(e => !e.itemName?.toLowerCase().includes('supervisor salary'));
-    if (supervisorExpense && supervisorExpense.amount > 0) {
-      const alreadyIncluded = finalExpenses.some(e => e.itemName.includes('Supervisor Attendance Expense'));
-      if (!alreadyIncluded) {
-        finalExpenses.unshift({
-          itemName: `Supervisor Attendance Expense (${supervisorExpense.notes})`,
-          amount: supervisorExpense.amount,
-        });
-      }
-    }
 
     const finalSupervisorSalary = supervisorSalaryInfo?.totalSalary || 0;
     const finalEmployeeSalaries = allEmployeeSalaries.filter(s => s.totalSalary > 0);
@@ -821,110 +823,233 @@ export const WorkEntryTab = ({
                 )}
               </div>
             )}
-
             {/* Site selection */}
             <div>
-            <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-2">
-              <MapPin className="w-3.5 h-3.5" /> Select Site
-            </Label>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5">
+                <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-primary" /> Select Site ({allAvailableSites.length} Total Projects)
+                </Label>
+                
+                {/* Scope Filter Pills */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setSiteFilterScope('all')}
+                    className={`text-[11px] font-bold px-2.5 py-1 rounded-lg transition-all ${
+                      siteFilterScope === 'all'
+                        ? 'bg-primary text-white shadow-xs'
+                        : 'bg-muted/50 text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    All Sites ({allAvailableSites.length})
+                  </button>
+                  {mySites.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSiteFilterScope('assigned')}
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded-lg transition-all ${
+                        siteFilterScope === 'assigned'
+                          ? 'bg-primary text-white shadow-xs'
+                          : 'bg-muted/50 text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      ⭐ My Assigned ({mySites.length})
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSiteFilterScope('active')}
+                    className={`text-[11px] font-bold px-2.5 py-1 rounded-lg transition-all ${
+                      siteFilterScope === 'active'
+                        ? 'bg-primary text-white shadow-xs'
+                        : 'bg-muted/50 text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    🟢 Active ({allAvailableSites.filter(s => s.status === 'active').length})
+                  </button>
+                </div>
+              </div>
 
-            {mySites.length > 3 && (
-              <div className="relative mb-2">
+              {/* Search input - always available for instant filtering */}
+              <div className="relative mb-2.5">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search site or client..."
+                  placeholder="Search every site by project name, client, or address..."
                   value={siteSearch}
                   onChange={e => setSiteSearch(e.target.value)}
-                  className="h-10 rounded-xl pl-8 text-sm"
+                  className="h-10 rounded-xl pl-8 pr-8 text-sm bg-card"
                 />
+                {siteSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setSiteSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
-            )}
 
-            {mySites.length === 0 ? (
-              <div className="text-center py-6 bg-muted/40 rounded-xl border border-border/50">
-                <p className="text-xs text-muted-foreground">No sites assigned to you</p>
-              </div>
-            ) : (() => {
-              const filtered = mySites.filter(s =>
-                s.name.toLowerCase().includes(siteSearch.toLowerCase()) ||
-                s.clientName.toLowerCase().includes(siteSearch.toLowerCase())
-              );
-              return filtered.length === 0 ? (
-                <div className="text-center py-5 bg-muted/40 rounded-xl border border-border/50">
-                  <p className="text-xs text-muted-foreground">No sites match "{siteSearch}"</p>
+              {displayedSites.length === 0 ? (
+                <div className="text-center py-6 bg-muted/40 rounded-xl border border-border/50">
+                  <p className="text-xs text-muted-foreground">
+                    {siteSearch ? `No sites match "${siteSearch}"` : 'No sites found in this filter'}
+                  </p>
+                  {siteFilterScope !== 'all' && (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      onClick={() => { setSiteFilterScope('all'); setSiteSearch(''); }}
+                      className="text-xs text-primary mt-1"
+                    >
+                      View All Sites
+                    </Button>
+                  )}
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {filtered.map(s => {
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {displayedSites.map(s => {
                     const isActive = s.status === 'active';
                     const isSelected = siteId === s.id;
+                    const isMyAssigned = assignedSiteIdSet.has(s.id);
+                    const isAttSite = myAtt?.siteId === s.id;
+                    const hasTodayLog = (dailyLogs || []).some(l => l.siteId === s.id && l.date === todayStr);
+
                     return (
                       <button
                         key={s.id}
                         type="button"
-                        disabled={!isActive}
                         onClick={() => {
-                          if (isActive) {
-                            setSiteId(s.id);
-                            setSiteSearch('');
-                            // Auto-fill workerCounts from attendance siteAssignments
-                            const assignment = myAtt?.siteAssignments?.find(sa => sa.siteId === s.id);
-                            if (assignment?.counts) {
-                              setWorkerCounts(assignment.counts);
-                            } else if ((!myAtt?.siteAssignments || myAtt.siteAssignments.length === 0) && myAtt?.siteId === s.id && availableCrew) {
-                              setWorkerCounts(availableCrew);
-                            } else {
-                              setWorkerCounts({});
-                            }
+                          setSiteId(s.id);
+                          setCustomSiteMode(false);
+                          setSiteSearch('');
+                          // Auto-fill workerCounts from attendance siteAssignments
+                          const assignment = myAtt?.siteAssignments?.find(sa => sa.siteId === s.id);
+                          if (assignment?.counts) {
+                            setWorkerCounts(assignment.counts);
+                          } else if ((!myAtt?.siteAssignments || myAtt.siteAssignments.length === 0) && myAtt?.siteId === s.id && availableCrew) {
+                            setWorkerCounts(availableCrew);
+                          } else {
+                            setWorkerCounts({});
                           }
                         }}
                         className={`w-full text-left rounded-xl px-3.5 py-3 border transition-all flex items-center justify-between gap-3
                           ${isSelected
-                            ? 'border-[hsl(38_72%_42%)] bg-[hsl(38_72%_42%/0.08)] shadow-sm'
-                            : isActive
-                              ? 'border-border/60 bg-card hover:border-[hsl(38_72%_42%/0.5)] hover:bg-muted/40 active:scale-[0.98]'
-                              : 'border-border/30 bg-muted/20 opacity-50 cursor-not-allowed'
+                            ? 'border-[hsl(38_72%_42%)] bg-[hsl(38_72%_42%/0.1)] shadow-sm ring-1 ring-[hsl(38_72%_42%/0.4)]'
+                            : 'border-border/60 bg-card hover:border-[hsl(38_72%_42%/0.5)] hover:bg-muted/40 active:scale-[0.98]'
                           }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isActive ? 'bg-green-500' : s.status === 'completed' ? 'bg-gray-400' : 'bg-amber-400'}`} />
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold truncate leading-tight">{s.name}</p>
-                            {s.clientName && (
-                              <p className="text-[10px] text-muted-foreground truncate">{s.clientName}</p>
-                            )}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="text-sm font-semibold truncate leading-tight text-foreground">{s.name}</p>
+                              {isAttSite && (
+                                <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
+                                  📍 Today
+                                </span>
+                              )}
+                              {isMyAssigned && !isAttSite && (
+                                <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
+                                  ⭐ Assigned
+                                </span>
+                              )}
+                              {hasTodayLog && (
+                                <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-0.5">
+                                  <CheckCircle2 className="w-2.5 h-2.5" /> Logged Today
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[10px] text-muted-foreground truncate mt-0.5">
+                              {s.clientName && <span>Client: {s.clientName}</span>}
+                              {s.address && <span>• {s.address}</span>}
+                            </div>
                           </div>
                         </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 capitalize ${isActive
-                          ? 'bg-green-500/15 text-green-600'
-                          : s.status === 'completed'
-                            ? 'bg-gray-400/15 text-gray-500'
-                            : 'bg-amber-400/15 text-amber-600'
-                          }`}>
-                          {s.status.replace('-', ' ')}
-                        </span>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full capitalize ${isActive
+                            ? 'bg-green-500/15 text-green-600'
+                            : s.status === 'completed'
+                              ? 'bg-gray-400/15 text-gray-500'
+                              : 'bg-amber-400/15 text-amber-600'
+                            }`}>
+                            {s.status.replace('-', ' ')}
+                          </span>
+                          {isSelected && (
+                            <span className="w-5 h-5 rounded-full bg-[hsl(38_72%_42%)] text-white flex items-center justify-center text-xs font-bold">
+                              ✓
+                            </span>
+                          )}
+                        </div>
                       </button>
                     );
                   })}
                 </div>
-              );
-            })()}
+              )}
 
-            <button
-              type="button"
-              onClick={() => {
-                setCustomSiteMode(v => !v);
-                setSiteId('');
-                setCustomSiteName('');
-                setVisitReason('');
-                setSiteSearch('');
-              }}
-              className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border/60 text-xs font-semibold text-muted-foreground hover:border-[hsl(38_72%_42%/0.5)] hover:text-foreground transition-all"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              {customSiteMode ? 'Choose from My Sites list instead' : 'Visited a new / unlisted site or office? Click here'}
-            </button>
-          </div>
+              {/* Recent Work Entries Collapsible for Selected Site */}
+              {siteId && !customSiteMode && siteRecentLogs.length > 0 && (
+                <div className="mt-3 p-3 rounded-2xl bg-muted/30 border border-border/50 text-xs space-y-2">
+                  <div
+                    className="flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => setShowRecentSiteLogs(v => !v)}
+                  >
+                    <span className="font-bold text-foreground flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-primary" />
+                      Past Work Entries on {selectedSite?.name || 'this site'} ({siteRecentLogs.length})
+                    </span>
+                    <button type="button" className="text-muted-foreground hover:text-foreground text-xs flex items-center gap-1 font-semibold">
+                      <span>{showRecentSiteLogs ? 'Hide' : 'Show Past Logs'}</span>
+                      {showRecentSiteLogs ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+
+                  {showRecentSiteLogs && (
+                    <div className="space-y-1.5 pt-1.5 border-t border-border/40">
+                      {siteRecentLogs.map(log => {
+                        const logWorkers = log.workerCounts ? Object.values(log.workerCounts).reduce((s, v) => s + (Number(v) || 0), 0) : 0;
+                        const logExpenseTotal = (log.expenses || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+                        return (
+                          <div key={log.id} className="p-2.5 rounded-xl bg-card border border-border/40 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-foreground text-xs">{log.date}</span>
+                              <span className="text-[10px] text-muted-foreground">{log.staffName || 'Supervisor'}</span>
+                            </div>
+                            {log.notes && (
+                              <p className="text-[11px] text-muted-foreground line-clamp-2 italic">
+                                "{log.notes}"
+                              </p>
+                            )}
+                            <div className="flex items-center gap-3 text-[10px] text-muted-foreground pt-0.5">
+                              {log.workLevelStage && <span>🏷️ {log.workLevelStage}</span>}
+                              {logWorkers > 0 && <span>👥 {logWorkers} crew</span>}
+                              {logExpenseTotal > 0 && <span>💸 ₹{logExpenseTotal.toLocaleString()} expenses</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomSiteMode(v => !v);
+                  setSiteId('');
+                  setCustomSiteName('');
+                  setVisitReason('');
+                  setSiteSearch('');
+                }}
+                className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-border/60 text-xs font-semibold text-muted-foreground hover:border-[hsl(38_72%_42%/0.5)] hover:text-foreground transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {customSiteMode ? 'Choose from Sites list instead' : 'Visited a new / unlisted site or office? Click here'}
+              </button>
+            </div>
 
           {/* Custom site inputs */}
           {customSiteMode && (
@@ -1760,41 +1885,9 @@ export const WorkEntryTab = ({
                       <IndianRupee className="w-3.5 h-3.5 text-amber-500" /> Site Daily Expenses (Food, Petrol, Materials)
                     </Label>
                     <span className="text-xs font-bold text-destructive">
-                      Total Expenses: ₹{(expenses.reduce((s, e) => s + (e.amount || 0), 0) + (supervisorExpense?.amount || 0)).toLocaleString()}
+                      Total Expenses: ₹{expenses.reduce((s, e) => s + (e.amount || 0), 0).toLocaleString()}
                     </span>
                   </div>
-
-                  {/* Supervisor Attendance Site Expense from Team Attendance */}
-                  {supervisorExpense && (
-                    <div className="mb-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
-                          <IndianRupee className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-foreground">
-                              Supervisor Site Expense (from Team Attendance)
-                            </span>
-                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-800 dark:text-amber-200">
-                              {supervisorExpense.method}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-muted-foreground mt-0.5">
-                            {supervisorExpense.notes}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-extrabold text-amber-700 dark:text-amber-300">
-                          ₹{supervisorExpense.amount.toLocaleString()}
-                        </span>
-                        <span className="text-[9px] font-semibold text-muted-foreground block">
-                          Auto-added on site
-                        </span>
-                      </div>
-                    </div>
-                  )}
                   <div className="space-y-2">
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <select

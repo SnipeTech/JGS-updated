@@ -225,6 +225,12 @@ export interface Attendance {
   expenseAmount?: number;
   expenseNotes?: string;
   expensePaymentMethod?: string;
+  expenseStatus?: 'pending' | 'verified' | 'paid' | 'rejected';
+  expenseVerifiedBy?: string;
+  expenseVerifiedAt?: string;
+  expensePaidAt?: string;
+  expensePaidAmount?: number;
+  expenseRejectionReason?: string;
   expenses?: { itemName: string; amount: number }[];
   presentCounts?: LabourCount;
   halfDayCounts?: LabourCount;
@@ -245,6 +251,48 @@ export interface MaterialSetting {
   defaultRate?: number;
   isRental?: boolean;
   rentalRatePerDay?: number;
+  // Store room inventory tracking:
+  isStoreRoom?: boolean;
+  stockQuantity?: number;
+  minStockAlert?: number;
+  storeRoomLocation?: string;
+  buyingPrice?: number;
+  totalPurchaseCost?: number;
+}
+
+export interface StoreRoomDispatchRecord {
+  id: string;
+  materialId: string;
+  materialName: string;
+  category?: string;
+  quantity: number;
+  unit: string;
+  siteId: string;
+  siteName: string;
+  workLevelStage?: string;
+  startDate: string;
+  startTime?: string;
+  deliveryDate?: string; // Date product was delivered/arrived on site
+  returnDate?: string;
+  returnTime?: string;
+  dispatchDate?: string;
+  dispatchTime?: string;
+  driverId?: string;
+  driverName?: string;
+  vehicleId?: string;
+  vehicleNumber?: string;
+  transitCost?: number;
+  perDayRate?: number;
+  totalDays?: number;
+  storeRoomAmount?: number;
+  storeRoomProfit?: number;
+  destinationType?: 'store_room' | 'other_site';
+  transferToSiteId?: string;
+  transferToSiteName?: string;
+  status: 'active' | 'returned' | 'dispatched' | 'delivered';
+  notes?: string;
+  dispatchedBy?: string;
+  createdAt: string;
 }
 
 export const MATERIAL_CATEGORIES = [
@@ -387,10 +435,17 @@ export interface MaterialRequest {
   status: 'pending' | 'assigned' | 'completed' | 'cancelled';
   workLevelStage?: string;
   
-  // Sourcing (Supplier vs Inter-Site Transfer):
-  sourceType?: 'supplier' | 'site';
+  // Sourcing (Supplier vs Inter-Site Transfer vs Store Room):
+  sourceType?: 'supplier' | 'site' | 'store_room';
   sourceSiteId?: string;
   sourceSiteName?: string;
+  isStoreRoom?: boolean;
+  storeRoomMaterialId?: string;
+  startDate?: string;
+  deliveryDate?: string; // Date delivered to site
+  returnDate?: string;
+  storeRoomAmount?: number;
+  storeRoomProfit?: number;
   
   // Assignment by Admin:
   driverId?: string;
@@ -441,6 +496,22 @@ export interface MaterialRequest {
   completionNotes?: string;
 }
 
+export interface CrushedStockRecord {
+  id: string;
+  materialId?: string;
+  materialName: string;
+  category?: string;
+  unit: string;
+  crushedQuantity: number;
+  buyingPrice: number;
+  lossAmount: number;
+  reason: string;
+  notes?: string;
+  date: string;
+  time?: string;
+  createdAt?: string;
+}
+
 export interface AppState {
   staffList: Staff[];
   sites: Site[];
@@ -462,5 +533,8 @@ export interface AppState {
   unitMaster: string[];
   materialRentals: MaterialRental[];
   stageCompletionRequests: StageCompletionRequest[];
+  storeRoomDispatches?: StoreRoomDispatchRecord[];
+  crushedStockHistory?: CrushedStockRecord[];
   currentUser: { id: string; name?: string; role: 'admin' | 'staff'; adminPermissions?: string[] } | null;
 }
+

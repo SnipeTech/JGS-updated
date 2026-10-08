@@ -3,7 +3,8 @@ from .models import (
     Staff, Site, Customer, Product, Quotation, ManualExpense,
     Vendor, WorkEntry, DailyLog, Attendance, MaterialSetting,
     MaterialRental, Supplier, Vehicle, VehicleMaintenance, MaterialRequest,
-    PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest
+    PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest,
+    StoreRoomDispatch
 )
 
 
@@ -76,6 +77,12 @@ class MaterialSettingSerializer(serializers.ModelSerializer):
 class MaterialRentalSerializer(serializers.ModelSerializer):
     class Meta:
         model = MaterialRental
+        fields = '__all__'
+
+
+class StoreRoomDispatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StoreRoomDispatch
         fields = '__all__'
 
 

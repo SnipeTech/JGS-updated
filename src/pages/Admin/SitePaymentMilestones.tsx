@@ -51,7 +51,7 @@ export const SitePaymentMilestones = ({
   manualExpenses = [],
   attendances = []
 }: Props) => {
-  const { addMaterialRental, materialSettings = [], vehicles = [] } = useApp();
+  const { addMaterialRental, materialSettings = [], vehicles = [], storeRoomDispatches = [] } = useApp();
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
   const [reportModalStage, setReportModalStage] = useState<string | null>(null);
   const [recordPayStage, setRecordPayStage] = useState<string | null>(null);
@@ -413,12 +413,13 @@ export const SitePaymentMilestones = ({
       }
     });
 
-    // 1b. Also include Supervisor Attendance Site Expenses if not already in log.expenses
+    // 1b. Also include Supervisor Attendance Site Expenses if verified and paid by Admin
     attendances
-      .filter(a => (a.siteId === site.id || a.siteAssignments?.some(sa => sa.siteId === site.id)) && (a.expenseAmount || 0) > 0)
+      .filter(a => (a.siteId === site.id || a.siteAssignments?.some(sa => sa.siteId === site.id)) && (a.expenseAmount || 0) > 0 && a.expenseStatus === 'paid')
       .forEach(a => {
+        const finalAmount = a.expensePaidAmount || a.expenseAmount || 0;
         const alreadyIn = supervisorExpenseItems.some(item => 
-          item.date === a.date && item.amount === a.expenseAmount
+          item.date === a.date && item.amount === finalAmount
         );
         if (!alreadyIn) {
           const staffObj = staffList.find(s => s.id === a.staffId);
@@ -426,8 +427,8 @@ export const SitePaymentMilestones = ({
             logId: a.id,
             date: a.date,
             staffName: staffObj?.name || 'Supervisor',
-            itemName: a.expenseNotes ? `Supervisor Attendance (${a.expenseNotes})` : 'Supervisor Attendance Expense',
-            amount: a.expenseAmount || 0,
+            itemName: a.expenseNotes ? `Supervisor Attendance (Paid: ${a.expenseNotes})` : 'Supervisor Attendance Expense (Paid)',
+            amount: finalAmount,
           });
         }
       });
@@ -439,7 +440,7 @@ export const SitePaymentMilestones = ({
       r => r.siteId === site.id && isStageMatch(r.workLevelStage) && (r.status === 'completed' || r.status === 'assigned')
     );
     const stageReqCost = stageReqs.reduce(
-      (sum, r) => sum + (r.materialCost || r.supplierPrice || 0) + (r.driverWage || 0),
+      (sum, r) => sum + (r.materialCost || r.supplierPrice || r.storeRoomAmount || 0) + (r.driverWage || 0),
       0
     );
 
@@ -448,7 +449,39 @@ export const SitePaymentMilestones = ({
       (sum, l) => sum + (l.materials || []).reduce((s, m) => s + ((m.cost || 0) * (m.quantity || 1)), 0),
       0
     );
-    const totalMaterialsCost = stageReqCost + stageLogMaterialCost;
+
+    // 2b-2. Store Room equipment & materials linked to this stage
+    const stageStoreRoomDispatches = (storeRoomDispatches || []).filter(d => {
+      const matchSite = (d.siteId && (d.siteId === site.id || String(d.siteId) === String(site.id))) ||
+                        (d.siteName && site.name && d.siteName.trim().toLowerCase() === site.name.trim().toLowerCase());
+      if (!matchSite) return false;
+      if (d.workLevelStage && isStageMatch(d.workLevelStage)) return true;
+      if (d.notes && isStageMatch(d.notes)) return true;
+      if (masterStages.indexOf(stageName) === 0 && !d.workLevelStage) return true;
+      return false;
+    });
+
+    const stageStoreRoomCost = stageStoreRoomDispatches.reduce((sum, d) => {
+      if (stageReqs.some(r => r.id === d.id)) return sum;
+      if (d.storeRoomAmount !== undefined && d.storeRoomAmount > 0) return sum + d.storeRoomAmount;
+      if (d.perDayRate && d.perDayRate > 0) {
+        const sDate = d.deliveryDate || d.startDate || d.date || format(new Date(), 'yyyy-MM-dd');
+        let days = 1;
+        try {
+          const s = new Date(sDate);
+          const now = new Date();
+          if (!isNaN(s.getTime())) {
+            days = Math.max(1, Math.ceil((now.getTime() - s.getTime()) / 86400000));
+          }
+        } catch {
+          days = 1;
+        }
+        return sum + (days * (Number(d.quantity) || 1) * Number(d.perDayRate));
+      }
+      return sum;
+    }, 0);
+
+    const totalMaterialsCost = stageReqCost + stageLogMaterialCost + stageStoreRoomCost;
 
     // 2c. Rental materials & machinery deployed to site for this stage
     const siteRentalsForSite = (materialRentals || []).filter(r => {

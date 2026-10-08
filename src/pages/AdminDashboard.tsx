@@ -5,7 +5,7 @@ import { format } from 'date-fns';
 import {
   LogOut, LayoutDashboard, MapPin, Users, CalendarDays,
   UserCircle, FileText, BarChart3, Wallet, Package,
-  ChevronRight, ArrowLeftRight, ShieldCheck, Sparkles, Truck
+  ChevronRight, ArrowLeftRight, ShieldCheck, Sparkles, Truck, Receipt
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -14,6 +14,7 @@ import { DashboardOverviewTab } from './Admin/DashboardOverviewTab';
 import { SitesTab } from './Admin/SitesTab';
 import { StaffTab } from './Admin/StaffTab';
 import { AttendanceTab } from './Admin/AttendanceTab';
+import { SupervisorExpensesAdminTab } from './Admin/SupervisorExpensesAdminTab';
 import { CustomersTab } from './Admin/CustomersTab';
 import { ReportsTab } from './Admin/ReportsTab';
 import { PayrollTab } from './Admin/PayrollTab';
@@ -28,6 +29,7 @@ export type TabId =
   | 'vehicles'
   | 'staff'
   | 'attendance'
+  | 'supervisor_expenses'
   | 'customers'
   | 'reports'
   | 'payroll'
@@ -36,6 +38,7 @@ export type TabId =
 export const ALL_NAV_ITEMS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: 'sites', label: 'Sites', icon: <MapPin className="w-4 h-4" /> },
+  { id: 'supervisor_expenses', label: 'Supervisor Expenses', icon: <Receipt className="w-4 h-4" /> },
   { id: 'materials', label: 'Materials & Suppliers', icon: <Package className="w-4 h-4" /> },
   { id: 'vehicles', label: 'Vehicles & Fuel', icon: <Truck className="w-4 h-4" /> },
   { id: 'settings', label: 'Settings & Master Data', icon: <ShieldCheck className="w-4 h-4" /> },
@@ -47,8 +50,16 @@ export const ALL_NAV_ITEMS: { id: TabId; label: string; icon: React.ReactNode }[
 ];
 
 const AdminDashboard = () => {
-  const { logout, currentUser, isBackendConnected, stageCompletionRequests, materialRequests } = useApp();
-  const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  const { logout, currentUser, isBackendConnected, stageCompletionRequests, materialRequests, attendances } = useApp();
+  const [activeTab, setActiveTabState] = useState<TabId>(() => {
+    const saved = sessionStorage.getItem('jgs_admin_active_tab') as TabId | null;
+    return (saved && ALL_NAV_ITEMS.some(n => n.id === saved)) ? saved : 'dashboard';
+  });
+
+  const setActiveTab = (tab: TabId) => {
+    sessionStorage.setItem('jgs_admin_active_tab', tab);
+    setActiveTabState(tab);
+  };
   const { i18n } = useTranslation();
 
   const pendingMilestoneReviews = useMemo(() => {
@@ -58,6 +69,13 @@ const AdminDashboard = () => {
   const pendingMaterialRequests = useMemo(() => {
     return (materialRequests || []).filter(r => r.status === 'pending').length;
   }, [materialRequests]);
+
+  const pendingSupervisorExpenses = useMemo(() => {
+    return (attendances || []).filter(a =>
+      Number(a.expenseAmount) > 0 &&
+      (!a.expenseStatus || a.expenseStatus === 'pending')
+    ).length;
+  }, [attendances]);
 
   useEffect(() => {
     // Force English language for i18n in Admin Portal
@@ -73,20 +91,24 @@ const AdminDashboard = () => {
     }
   }, []);
 
-  const NAV_ITEMS = ALL_NAV_ITEMS.filter(item => {
-    if (currentUser?.id === 'admin') return true; // Superadmin always has full access
-    if (Array.isArray(currentUser?.adminPermissions)) {
-      return currentUser.adminPermissions.includes(item.id);
-    }
-    return true; // Default all access if permissions array not set
-  });
+  const NAV_ITEMS = useMemo(() => {
+    return ALL_NAV_ITEMS.filter(item => {
+      if (currentUser?.id === 'admin') return true; // Superadmin always has full access
+      if (Array.isArray(currentUser?.adminPermissions)) {
+        return currentUser.adminPermissions.includes(item.id);
+      }
+      return true; // Default all access if permissions array not set
+    });
+  }, [currentUser?.id, currentUser?.adminPermissions]);
 
-  // Automatically adjust activeTab if the current tab is not permitted
+  // Automatically adjust activeTab only if user permissions explicitly forbid it
   useEffect(() => {
-    if (NAV_ITEMS.length > 0 && !NAV_ITEMS.some(n => n.id === activeTab)) {
-      setActiveTab(NAV_ITEMS[0].id);
+    if (currentUser?.id !== 'admin' && Array.isArray(currentUser?.adminPermissions) && currentUser.adminPermissions.length > 0) {
+      if (NAV_ITEMS.length > 0 && !NAV_ITEMS.some(n => n.id === activeTab)) {
+        setActiveTab(NAV_ITEMS[0].id);
+      }
     }
-  }, [NAV_ITEMS, activeTab]);
+  }, [NAV_ITEMS, activeTab, currentUser?.id, currentUser?.adminPermissions]);
 
   const renderTab = () => {
     if (currentUser?.id !== 'admin' && Array.isArray(currentUser?.adminPermissions) && !NAV_ITEMS.some(n => n.id === activeTab)) {
@@ -104,6 +126,8 @@ const AdminDashboard = () => {
         return <DashboardOverviewTab />;
       case 'sites':
         return <SitesTab />;
+      case 'supervisor_expenses':
+        return <SupervisorExpensesAdminTab />;
       case 'staff':
         return <StaffTab />;
       case 'attendance':
@@ -169,6 +193,11 @@ const AdminDashboard = () => {
                   {item.id === 'sites' && pendingMilestoneReviews > 0 && (
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500 text-white animate-pulse shadow-xs">
                       {pendingMilestoneReviews}
+                    </span>
+                  )}
+                  {item.id === 'supervisor_expenses' && pendingSupervisorExpenses > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white animate-pulse shadow-xs">
+                      {pendingSupervisorExpenses}
                     </span>
                   )}
                   {item.id === 'materials' && pendingMaterialRequests > 0 && (
@@ -292,6 +321,9 @@ const AdminDashboard = () => {
                   <span>{item.label}</span>
                   {item.id === 'sites' && pendingMilestoneReviews > 0 && (
                     <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                  )}
+                  {item.id === 'supervisor_expenses' && pendingSupervisorExpenses > 0 && (
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                   )}
                   {item.id === 'materials' && pendingMaterialRequests > 0 && (
                     <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />

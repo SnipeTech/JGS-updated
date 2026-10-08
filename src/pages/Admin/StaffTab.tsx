@@ -8,7 +8,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
-  Users, Plus, UserCircle, PhoneCall, Trash2, PenLine, MapPin, Truck, ChevronDown, ChevronUp, Shield
+  Users, Plus, UserCircle, PhoneCall, Trash2, PenLine, MapPin, Truck, ChevronDown, ChevronUp, Shield,
+  Search, X
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Staff } from '@/types';
@@ -106,9 +107,21 @@ export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: 
         <Button variant="ghost" size="sm" onClick={onBack} className="h-8 rounded-xl text-xs font-semibold pl-2">
           ← Back
         </Button>
-        <div className="flex-1">
-          <h3 className="font-heading font-bold text-base">{staff.name}</h3>
-          <p className="text-xs text-muted-foreground capitalize">{staff.role || 'Staff'}</p>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-heading font-bold text-base">{staff.name}</h3>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-muted text-muted-foreground font-mono border border-border/50">
+              Staff #{staffList.findIndex(s => s.id === staff.id) + 1}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
+            <span className="capitalize">{staff.role || 'Staff'}</span>
+            {staff.phone && (
+              <a href={`tel:${staff.phone}`} className="flex items-center gap-1 text-primary hover:underline font-semibold font-mono">
+                <PhoneCall className="w-3 h-3" /> {staff.phone}
+              </a>
+            )}
+          </div>
         </div>
         <button
           onClick={startEdit}
@@ -121,16 +134,26 @@ export const StaffDetailView = ({ staffId, onBack }: { staffId: string; onBack: 
       {/* Staff Salary & Info display */}
       {!editing && (
         <div className="form-card !py-3 space-y-2">
-          <div className="grid grid-cols-2 gap-3 text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+            <div>
+              <span className="text-muted-foreground">Staff Phone Number: </span>
+              {staff.phone ? (
+                <a href={`tel:${staff.phone}`} className="font-bold text-primary hover:underline flex items-center gap-1 mt-0.5 font-mono">
+                  <PhoneCall className="w-3 h-3" /> {staff.phone}
+                </a>
+              ) : (
+                <span className="text-muted-foreground italic block mt-0.5">Not provided</span>
+              )}
+            </div>
             <div>
               <span className="text-muted-foreground">Salary Basis: </span>
-              <span className="font-semibold capitalize">
+              <span className="font-semibold capitalize block mt-0.5">
                 {staff.salaryType === 'hourly' ? 'Hourly-Based' : 'Day-Based'}
               </span>
             </div>
             <div>
               <span className="text-muted-foreground">Salary: </span>
-              <span className="font-semibold">
+              <span className="font-semibold block mt-0.5">
                 {staff.salaryType === 'hourly' ? `₹${staff.perHourSalary || 0}/hr` : `₹${staff.perDaySalary || 0}/day`}
               </span>
             </div>
@@ -378,7 +401,21 @@ export const StaffTab = () => {
   const [show, setShow] = useState(false);
   const [selectedStaffId, setSelectedStaffId] = useState<string | null>(null);
   const [expandedSupervisors, setExpandedSupervisors] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
   const { t } = useTranslation();
+
+  const filteredStaffList = useMemo(() => {
+    return staffList.filter(s => {
+      const q = searchQuery.toLowerCase().trim();
+      const matchesSearch = !q ||
+        s.name.toLowerCase().includes(q) ||
+        (s.phone && s.phone.includes(q)) ||
+        (s.role && s.role.toLowerCase().includes(q));
+      const matchesRole = roleFilter === 'all' || s.role === roleFilter;
+      return matchesSearch && matchesRole;
+    });
+  }, [staffList, searchQuery, roleFilter]);
 
   if (selectedStaffId) {
     return <StaffDetailView staffId={selectedStaffId} onBack={() => setSelectedStaffId(null)} />;
@@ -430,7 +467,10 @@ export const StaffTab = () => {
   return (
     <div className="space-y-4 animate-slide-up">
       <div className="flex items-center justify-between">
-        <h3 className="section-header">{t('staff.staffAndSupervisors')}</h3>
+        <div>
+          <h3 className="section-header !mb-0">{t('staff.staffAndSupervisors')}</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Manage employees, mobile numbers, roles, and salary rates.</p>
+        </div>
         <Button
           size="sm"
           onClick={() => setShow(v => !v)}
@@ -439,6 +479,45 @@ export const StaffTab = () => {
         >
           <Plus className="w-3.5 h-3.5" /> Add Staff
         </Button>
+      </div>
+
+      {/* Search & Role Filter Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search staff by name, phone number, or role..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="h-9 rounded-xl pl-9 pr-8 text-xs bg-card"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          {['all', 'supervisor', 'driver', 'admin', 'labour'].map(r => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setRoleFilter(r)}
+              className={`px-3 py-1 rounded-xl text-xs font-semibold capitalize transition-all whitespace-nowrap ${
+                roleFilter === r
+                  ? 'bg-card text-foreground font-bold shadow-xs border border-border/60'
+                  : 'text-muted-foreground hover:text-foreground bg-muted/40'
+              }`}
+            >
+              {r === 'all' ? `All (${staffList.length})` : `${r} (${staffList.filter(s => s.role === r).length})`}
+            </button>
+          ))}
+        </div>
       </div>
 
       {show && (
@@ -613,103 +692,142 @@ export const StaffTab = () => {
       )}
 
       {/* Staff Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-        {staffList.map(s => {
-          const isSup = s.role === 'supervisor';
-          const isDrv = s.role === 'driver';
-          const isAdmin = s.role === 'admin';
-          const assignedWorkers = staffList.filter(w => w.supervisorId === s.id);
+      {filteredStaffList.length === 0 ? (
+        <div className="text-center py-12 bg-card rounded-2xl border border-border/50">
+          <Users className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm font-semibold text-foreground">
+            {searchQuery ? `No staff matching "${searchQuery}"` : 'No staff members found'}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {searchQuery ? 'Try another keyword or phone number.' : 'Add your first staff member to get started.'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          {filteredStaffList.map((s) => {
+            const isSup = s.role === 'supervisor';
+            const isDrv = s.role === 'driver';
+            const isAdmin = s.role === 'admin';
+            const assignedWorkers = staffList.filter(w => w.supervisorId === s.id);
+            const staffIndex = staffList.findIndex(st => st.id === s.id) + 1;
 
-          return (
-            <Card
-              key={s.id}
-              className="p-5 rounded-3xl bg-card border border-border/60 hover:border-primary/50 shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300 space-y-3.5 group"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div
-                  className="flex items-center gap-3 cursor-pointer flex-1 min-w-0"
-                  onClick={() => setSelectedStaffId(s.id)}
-                >
+            return (
+              <Card
+                key={s.id}
+                className="p-5 rounded-3xl bg-card border border-border/60 hover:border-primary/50 shadow-luxury hover:shadow-luxury-lg hover:-translate-y-0.5 transition-all duration-300 space-y-3.5 group"
+              >
+                <div className="flex items-start justify-between gap-2">
                   <div
-                    className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 text-white shadow-xs group-hover:scale-105 transition-transform ${
-                      isAdmin ? 'bg-purple-600 shadow-xs' : isDrv ? 'bg-blue-600' : isSup ? 'bg-primary' : 'bg-muted-foreground/40'
-                    }`}
+                    className="flex items-center gap-3 cursor-pointer flex-1 min-w-0"
+                    onClick={() => setSelectedStaffId(s.id)}
                   >
-                    {isAdmin ? <Shield className="w-5 h-5" /> : isDrv ? <Truck className="w-5 h-5" /> : <UserCircle className="w-5 h-5" />}
-                  </div>
-                  <div className="min-w-0">
-                    <h4 className="font-heading font-bold text-base text-foreground hover:text-primary transition-colors truncate">
-                      {s.name}
-                    </h4>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <p className="text-xs text-muted-foreground capitalize">{s.role}</p>
-                      {isAdmin && (
-                        <span className="bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-bold px-2 py-0.5 rounded-full border border-purple-500/30">
-                          ADMIN
+                    <div
+                      className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 text-white shadow-xs group-hover:scale-105 transition-transform ${
+                        isAdmin ? 'bg-purple-600 shadow-xs' : isDrv ? 'bg-blue-600' : isSup ? 'bg-primary' : 'bg-muted-foreground/40'
+                      }`}
+                    >
+                      {isAdmin ? <Shield className="w-5 h-5" /> : isDrv ? <Truck className="w-5 h-5" /> : <UserCircle className="w-5 h-5" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h4 className="font-heading font-bold text-base text-foreground hover:text-primary transition-colors truncate">
+                          {s.name}
+                        </h4>
+                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground border border-border/50">
+                          #{staffIndex}
                         </span>
-                      )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <p className="text-xs text-muted-foreground capitalize font-medium">{s.role}</p>
+                        {isAdmin && (
+                          <span className="bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-bold px-2 py-0.5 rounded-full border border-purple-500/30">
+                            ADMIN
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Staff Number / Phone */}
+                      <div className="mt-1.5">
+                        {s.phone ? (
+                          <a
+                            href={`tel:${s.phone}`}
+                            onClick={e => e.stopPropagation()}
+                            className="inline-flex items-center gap-1.5 text-xs text-primary font-semibold hover:underline bg-primary/10 hover:bg-primary/20 px-2.5 py-0.5 rounded-lg border border-primary/25 transition-colors"
+                            title="Click to call staff"
+                          >
+                            <PhoneCall className="w-3 h-3 text-primary shrink-0" />
+                            <span className="font-mono tracking-tight">{s.phone}</span>
+                          </a>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground/60 italic flex items-center gap-1">
+                            <PhoneCall className="w-3 h-3 text-muted-foreground/30 shrink-0" />
+                            No phone number
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => {
-                    deleteStaff(s.id);
-                    toast.success('Staff member removed');
-                  }}
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl shrink-0"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-border/50 text-muted-foreground font-medium">
-                <div>
-                  Salary:{' '}
-                  <strong className="text-foreground">
-                    {s.salaryType === 'hourly' ? `₹${s.perHourSalary || 0}/hr` : `₹${s.perDaySalary || 0}/d`}
-                  </strong>
-                </div>
-                <div>
-                  OT Rate: <strong className="text-foreground">₹{s.incentivePerHour || 0}/hr</strong>
-                </div>
-              </div>
-
-              {isSup && (
-                <div className="pt-2 border-t border-border/50">
-                  <div
-                    className="flex items-center justify-between text-xs font-semibold cursor-pointer text-muted-foreground hover:text-foreground"
-                    onClick={() => toggleSupervisor(s.id)}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      deleteStaff(s.id);
+                      toast.success('Staff member removed');
+                    }}
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl shrink-0"
                   >
-                    <span>Assigned Crew ({assignedWorkers.length})</span>
-                    {expandedSupervisors.includes(s.id) ? (
-                      <ChevronUp className="w-4 h-4" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4" />
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-border/50 text-muted-foreground font-medium">
+                  <div>
+                    Salary:{' '}
+                    <strong className="text-foreground">
+                      {s.salaryType === 'hourly' ? `₹${s.perHourSalary || 0}/hr` : `₹${s.perDaySalary || 0}/d`}
+                    </strong>
+                  </div>
+                  <div>
+                    OT Rate: <strong className="text-foreground">₹{s.incentivePerHour || 0}/hr</strong>
+                  </div>
+                </div>
+
+                {isSup && (
+                  <div className="pt-2 border-t border-border/50">
+                    <div
+                      className="flex items-center justify-between text-xs font-semibold cursor-pointer text-muted-foreground hover:text-foreground"
+                      onClick={() => toggleSupervisor(s.id)}
+                    >
+                      <span>Assigned Crew ({assignedWorkers.length})</span>
+                      {expandedSupervisors.includes(s.id) ? (
+                        <ChevronUp className="w-4 h-4" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4" />
+                      )}
+                    </div>
+                    {expandedSupervisors.includes(s.id) && (
+                      <div className="mt-2.5 space-y-1 bg-muted/40 p-3 rounded-2xl border border-border/40 text-xs">
+                        {assignedWorkers.length === 0 ? (
+                          <p className="text-[11px] text-muted-foreground italic">No crew assigned</p>
+                        ) : (
+                          assignedWorkers.map(w => (
+                            <div key={w.id} className="flex justify-between items-center py-1 border-b border-border/20 last:border-0">
+                              <span className="font-semibold text-foreground">{w.name}</span>
+                              <span className="text-[10px] text-muted-foreground capitalize">({w.role})</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
                     )}
                   </div>
-                  {expandedSupervisors.includes(s.id) && (
-                    <div className="mt-2.5 space-y-1 bg-muted/40 p-3 rounded-2xl border border-border/40 text-xs">
-                      {assignedWorkers.length === 0 ? (
-                        <p className="text-[11px] text-muted-foreground italic">No crew assigned</p>
-                      ) : (
-                        assignedWorkers.map(w => (
-                          <div key={w.id} className="flex justify-between items-center py-1 border-b border-border/20 last:border-0">
-                            <span className="font-semibold text-foreground">{w.name}</span>
-                            <span className="text-[10px] text-muted-foreground capitalize">({w.role})</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-          );
-        })}
-      </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

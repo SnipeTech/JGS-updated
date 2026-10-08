@@ -10,7 +10,8 @@ import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
   Package, MapPin, Plus, Trash2, ArrowRightLeft, Building2,
-  Clock, Truck, CheckCircle2, AlertCircle, Send, StickyNote
+  Clock, Truck, CheckCircle2, AlertCircle, Send, StickyNote,
+  Warehouse, Calendar
 } from 'lucide-react';
 import { MaterialRequestItem, Site, Staff, MATERIAL_CATEGORIES } from '@/types';
 import { calculateDuration, getSiteAvailableStock } from '@/lib/utils';
@@ -25,7 +26,8 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
   const { currentUser, sites, materialSettings, materialRequests, dailyLogs, addMaterialRequest, paymentStageMaster, unitMaster } = useApp();
 
   const [reqSiteId, setReqSiteId] = useState(initialSiteId || localStorage.getItem('today_active_site_id') || '');
-  const [reqSourceType, setReqSourceType] = useState<'supplier' | 'site'>('supplier');
+  const [reqSourceType, setReqSourceType] = useState<'supplier' | 'store_room' | 'site'>('supplier');
+  const [reqStartDate, setReqStartDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [reqSourceSiteId, setReqSourceSiteId] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [reqItems, setReqItems] = useState<MaterialRequestItem[]>([
@@ -34,8 +36,16 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
   const [reqNotes, setReqNotes] = useState('');
   const [reqStatusFilter, setReqStatusFilter] = useState<'all' | 'pending' | 'assigned' | 'completed'>('all');
 
+  const storeRoomCatalogItems = useMemo(() => {
+    return (materialSettings || []).filter(m => m.isStoreRoom);
+  }, [materialSettings]);
+
   const availableSites = useMemo(() => {
-    return (mySites && mySites.length > 0) ? mySites : sites;
+    if (!sites || sites.length === 0) return mySites || [];
+    const mySiteIds = new Set((mySites || []).map(s => s.id));
+    const assigned = sites.filter(s => mySiteIds.has(s.id));
+    const others = sites.filter(s => !mySiteIds.has(s.id));
+    return [...assigned, ...others];
   }, [mySites, sites]);
 
   const effectiveReqSiteId = useMemo(() => {
@@ -98,6 +108,24 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
         return;
       }
     }
+    if (reqSourceType === 'store_room') {
+      const unusedStock = storeRoomCatalogItems.find(st => !reqItems.some(item => item.name === st.name));
+      const chosen = unusedStock || storeRoomCatalogItems[0];
+      if (chosen) {
+        setReqItems(prev => [
+          ...prev,
+          {
+            name: chosen.name,
+            quantity: 1,
+            unit: chosen.unit || 'Units',
+            rate: chosen.defaultRate || 0,
+            amount: chosen.defaultRate || 0,
+            maxAvailable: chosen.stockQuantity
+          }
+        ]);
+        return;
+      }
+    }
     setReqItems(prev => [...prev, { name: '', quantity: 1, unit: 'Bags' }]);
   };
 
@@ -123,6 +151,45 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
             updated.quantity = found.qty;
           }
           updated.amount = (Number(updated.quantity) || 0) * found.rate;
+        }
+      } else if (field === 'name' && reqSourceType === 'store_room') {
+        const foundSetting = storeRoomCatalogItems.find(s => s.name === value);
+        if (foundSetting) {
+          const availStock = foundSetting.stockQuantity ?? 0;
+          const minAlert = foundSetting.minStockAlert ?? 5;
+          updated.unit = foundSetting.unit || 'Units';
+          updated.rate = foundSetting.defaultRate || 0;
+          updated.maxAvailable = availStock;
+
+          if (availStock <= 0) {
+            updated.quantity = 0;
+            toast.error(`"${foundSetting.name}" is OUT OF STOCK (0 in Store Room). Cannot request this item.`);
+          } else {
+            if (Number(updated.quantity) > availStock || !updated.quantity || Number(updated.quantity) <= 0) {
+              updated.quantity = 1 <= availStock ? 1 : availStock;
+            }
+            if (availStock <= minAlert) {
+              toast.warning(`⚠️ Low Stock Alert: Only ${availStock} ${foundSetting.unit || 'units'} left in Store Room (Min alert threshold: ${minAlert}).`);
+            }
+          }
+          updated.amount = (Number(updated.quantity) || 0) * (foundSetting.defaultRate || 0);
+        }
+      } else if (field === 'quantity') {
+        const numVal = Number(value);
+        if (reqSourceType === 'store_room' || reqSourceType === 'site') {
+          const maxAvail = item.maxAvailable !== undefined ? item.maxAvailable : Infinity;
+          if (maxAvail <= 0) {
+            toast.error(`Out of stock! Cannot enter quantity.`);
+            updated.quantity = 0;
+          } else if (numVal > maxAvail) {
+            toast.warning(`Out of range! Cannot enter more than available stock (${maxAvail} ${item.unit || 'units'}).`);
+            updated.quantity = maxAvail;
+          } else if (numVal < 0) {
+            updated.quantity = 0;
+          } else {
+            updated.quantity = value;
+          }
+          updated.amount = (Number(updated.quantity) || 0) * (Number(updated.rate) || 0);
         }
       } else if (field === 'name' && reqSourceType === 'supplier') {
         const foundSetting = materialSettings.find(s => s.name.toLowerCase() === String(value).trim().toLowerCase());
@@ -165,6 +232,21 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
       }
     }
 
+    if (reqSourceType === 'store_room') {
+      for (const item of validItems) {
+        const stockItem = storeRoomCatalogItems.find(s => s.name.toLowerCase() === item.name.trim().toLowerCase());
+        const avail = stockItem?.stockQuantity ?? 0;
+        if (avail <= 0) {
+          toast.error(`"${item.name}" is OUT OF STOCK (0 in Store Room). Cannot submit requisition.`);
+          return;
+        }
+        if (Number(item.quantity) > avail) {
+          toast.error(`Out of range! Cannot request ${item.quantity} ${item.unit} of "${item.name}". Only ${avail} available in Store Room.`);
+          return;
+        }
+      }
+    }
+
     // Automatically link requisition to the active construction level/stage for the destination site
     const masterStages = (targetSite.paymentStages && targetSite.paymentStages.length > 0)
       ? targetSite.paymentStages.map(s => s.stageName)
@@ -187,8 +269,10 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
       requestedByStaffId: activeStaffId,
       requestedByStaffName: activeStaffName,
       sourceType: reqSourceType,
-      sourceSiteId: reqSourceType === 'site' ? sourceSite?.id : undefined,
-      sourceSiteName: reqSourceType === 'site' ? sourceSite?.name : undefined,
+      sourceSiteId: reqSourceType === 'site' ? sourceSite?.id : (reqSourceType === 'store_room' ? 'store_room' : undefined),
+      sourceSiteName: reqSourceType === 'site' ? sourceSite?.name : (reqSourceType === 'store_room' ? 'Store Room / Warehouse' : undefined),
+      isStoreRoom: reqSourceType === 'store_room',
+      startDate: reqSourceType === 'store_room' ? (reqStartDate || format(new Date(), 'yyyy-MM-dd')) : undefined,
       items: validItems.map(i => ({
         name: i.name.trim(),
         quantity: Number(i.quantity),
@@ -196,17 +280,19 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
         rate: i.rate,
         amount: i.rate ? i.rate * Number(i.quantity) : undefined
       })),
-      notes: (reqSourceType === 'site' ? `[Inter-Site Transfer from ${sourceSite?.name}] ` : '') + (reqNotes.trim() || ''),
+      notes: (reqSourceType === 'site' ? `[Inter-Site Transfer from ${sourceSite?.name}] ` : reqSourceType === 'store_room' ? `[Store Room Warehouse Stock - Start Date: ${reqStartDate}] ` : '') + (reqNotes.trim() || ''),
       status: 'pending',
       workLevelStage: activeStageForReq,
-      date: format(new Date(), 'yyyy-MM-dd'),
+      date: reqSourceType === 'store_room' ? (reqStartDate || format(new Date(), 'yyyy-MM-dd')) : format(new Date(), 'yyyy-MM-dd'),
       time: format(new Date(), 'hh:mm a'),
       createdAt: new Date().toISOString()
     });
 
     toast.success(reqSourceType === 'site'
       ? `Inter-site material transfer request submitted to Admin!`
-      : `Material requisition for ${validItems.length} item(s) submitted to Admin!`
+      : (reqSourceType === 'store_room'
+        ? `Store Room product requisition submitted to Admin!`
+        : `Material requisition for ${validItems.length} item(s) submitted to Admin!`)
     );
     setReqItems([{ name: '', quantity: 1, unit: 'Bags' }]);
     setReqNotes('');
@@ -229,24 +315,48 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
         </div>
 
         <form onSubmit={handleSubmitMaterialRequest} className="space-y-4">
-          {/* Requisition Source Type: Supplier vs Another Site */}
+          {/* Requisition Source Type: Supplier vs Store Room vs Another Site */}
           <div>
             <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1.5">
               <ArrowRightLeft className="w-3.5 h-3.5" /> Requisition Source
             </Label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-1 bg-muted/60 rounded-xl border border-border/50">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1 bg-muted/60 rounded-xl border border-border/50">
+              <button
+                type="button"
+                onClick={() => {
+                  setReqSourceType('store_room');
+                  const firstStore = storeRoomCatalogItems[0];
+                  if (firstStore) {
+                    setReqItems([{
+                      name: firstStore.name,
+                      quantity: 1,
+                      unit: firstStore.unit || 'Units',
+                      rate: firstStore.defaultRate || 0,
+                      maxAvailable: firstStore.stockQuantity
+                    }]);
+                  } else {
+                    setReqItems([{ name: '', quantity: 1, unit: 'Units' }]);
+                  }
+                }}
+                className={`py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${reqSourceType === 'store_room'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                  }`}
+              >
+                <Warehouse className="w-4 h-4" /> Store Room Stock ({storeRoomCatalogItems.length})
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   setReqSourceType('supplier');
                   setReqItems([{ name: '', quantity: 1, unit: 'Bags' }]);
                 }}
-                className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${reqSourceType === 'supplier'
+                className={`py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${reqSourceType === 'supplier'
                     ? 'bg-primary text-white shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
                   }`}
               >
-                <Building2 className="w-4 h-4" /> Order from Supplier / New Purchase
+                <Building2 className="w-4 h-4" /> Order from Supplier
               </button>
               <button
                 type="button"
@@ -257,17 +367,17 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                   }
                   setReqItems([{ name: '', quantity: 1, unit: 'Units' }]);
                 }}
-                className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${reqSourceType === 'site'
+                className={`py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${reqSourceType === 'site'
                     ? 'bg-primary text-white shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
                   }`}
               >
-                <ArrowRightLeft className="w-4 h-4" /> Get from Another Site ({sourceSitesWithStock.length} Available)
+                <ArrowRightLeft className="w-4 h-4" /> Site Transfer ({sourceSitesWithStock.length})
               </button>
             </div>
           </div>
 
-          {/* Destination & Source Sites */}
+          {/* Destination & Source Details & Start Date */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1.5">
@@ -294,6 +404,23 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                 </SelectContent>
               </Select>
             </div>
+
+            {reqSourceType === 'store_room' && (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-emerald-600" /> Start Date on Site *
+                  </Label>
+                  <span className="text-[10px] text-emerald-600 font-semibold">Customizable</span>
+                </div>
+                <Input
+                  type="date"
+                  value={reqStartDate}
+                  onChange={e => setReqStartDate(e.target.value)}
+                  className="h-11 rounded-xl font-medium border-emerald-500/30 bg-emerald-500/5 text-xs"
+                />
+              </div>
+            )}
 
             {reqSourceType === 'site' && (
               <div>
@@ -341,6 +468,17 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                 )}
               </div>
             )}
+
+            {reqSourceType === 'supplier' && (
+              <div>
+                <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-primary" /> Fulfillment
+                </Label>
+                <div className="h-11 rounded-xl border border-border/60 bg-muted/30 px-3 flex items-center text-xs text-muted-foreground font-medium">
+                  Admin will assign verified supplier & dispatch driver
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Items List */}
@@ -360,6 +498,60 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                 <Plus className="w-3.5 h-3.5" /> Add Material
               </Button>
             </div>
+
+            {/* Quick Add Chips for Store Room mode */}
+            {reqSourceType === 'store_room' && (
+              <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] uppercase font-bold text-emerald-800 dark:text-emerald-300 tracking-wider flex items-center gap-1.5">
+                    <Warehouse className="w-3.5 h-3.5" /> Store Room Available Products ({storeRoomCatalogItems.length}):
+                  </p>
+                  <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
+                    Click to add to requisition
+                  </span>
+                </div>
+
+                {storeRoomCatalogItems.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">
+                    No items marked as Store Room stock in Material Catalog yet. Admin can enable "Store Room / Warehouse Stock" in Materials Presets Catalog.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 pt-0.5 max-h-36 overflow-y-auto">
+                    {storeRoomCatalogItems.map(chip => (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        onClick={() => {
+                          setReqItems(prev => {
+                            const hasEmptyFirst = prev.length === 1 && !prev[0].name.trim();
+                            const newItem = {
+                              name: chip.name,
+                              quantity: 1,
+                              unit: chip.unit || 'Units',
+                              rate: chip.defaultRate || 0,
+                              maxAvailable: chip.stockQuantity
+                            };
+                            if (hasEmptyFirst) return [newItem];
+                            return [...prev, newItem];
+                          });
+                          toast.info(`Added ${chip.name} (${chip.stockQuantity ?? 0} ${chip.unit || 'Units'} on hand)`);
+                        }}
+                        className="text-[11px] font-semibold bg-background hover:bg-emerald-500/15 text-foreground hover:text-emerald-700 dark:hover:text-emerald-300 border border-emerald-500/40 rounded-lg px-2.5 py-1 transition-all active:scale-95 flex items-center gap-1.5 shadow-2xs"
+                      >
+                        <Plus className="w-3 h-3 text-emerald-600 shrink-0" />
+                        <span>{chip.name}</span>
+                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-800 dark:text-emerald-200">
+                          {chip.stockQuantity ?? 0} {chip.unit || 'Units'}
+                        </span>
+                        {chip.storeRoomLocation && (
+                          <span className="text-[9px] text-muted-foreground">📍{chip.storeRoomLocation}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Quick Add Chips for Supplier mode with Category Filter */}
             {reqSourceType === 'supplier' && (
@@ -450,7 +642,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
             {/* Material input items list */}
             <div className="space-y-2.5">
               {reqItems.map((item, idx) => {
-                const isOverStock = reqSourceType === 'site' && item.maxAvailable !== undefined && Number(item.quantity) > item.maxAvailable;
+                const isOverStock = (reqSourceType === 'site' || reqSourceType === 'store_room') && item.maxAvailable !== undefined && Number(item.quantity) > item.maxAvailable;
 
                 return (
                   <div key={idx} className="p-3 bg-muted/20 border border-border/50 rounded-xl space-y-2 relative">
@@ -485,6 +677,29 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                               ))}
                             </SelectContent>
                           </Select>
+                        ) : reqSourceType === 'store_room' ? (
+                          <Select
+                            value={item.name}
+                            onValueChange={val => handleUpdateReqItem(idx, 'name', val)}
+                          >
+                            <SelectTrigger className="h-10 rounded-xl text-xs font-semibold border-emerald-500/40">
+                              <SelectValue placeholder="Select Store Room Product" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {storeRoomCatalogItems.map(st => {
+                                const stStock = st.stockQuantity ?? 0;
+                                const isZero = stStock <= 0;
+                                const isLow = !isZero && stStock <= (st.minStockAlert ?? 5);
+                                return (
+                                  <SelectItem key={st.id} value={st.name} className={isZero ? 'opacity-60 text-destructive' : ''}>
+                                    {isZero ? '❌ ' : isLow ? '⚠️ ' : '🏬 '}
+                                    {st.name} ({stStock} {st.unit || 'Units'} {isZero ? '· OUT OF STOCK' : isLow ? '· LOW STOCK' : 'in stock'})
+                                    {st.storeRoomLocation ? ` · 📍${st.storeRoomLocation}` : ''}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
                         ) : (
                           <Input
                             list="staff-material-presets"
@@ -504,11 +719,23 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                           type="number"
                           min="0.1"
                           step="any"
-                          max={reqSourceType === 'site' ? item.maxAvailable : undefined}
+                          max={(reqSourceType === 'site' || reqSourceType === 'store_room') ? item.maxAvailable : undefined}
                           placeholder="Qty"
                           value={item.quantity}
-                          onChange={e => handleUpdateReqItem(idx, 'quantity', e.target.value)}
-                          className={`h-10 rounded-xl text-xs font-semibold ${isOverStock ? 'border-destructive text-destructive' : ''}`}
+                          onChange={e => {
+                            const rawVal = e.target.value;
+                            if (reqSourceType === 'store_room' || reqSourceType === 'site') {
+                              const maxVal = item.maxAvailable !== undefined ? item.maxAvailable : Infinity;
+                              if (Number(rawVal) > maxVal) {
+                                toast.warning(`Out of range! Cannot enter more than available stock (${maxVal} ${item.unit || 'units'}).`);
+                                handleUpdateReqItem(idx, 'quantity', maxVal);
+                                return;
+                              }
+                            }
+                            handleUpdateReqItem(idx, 'quantity', rawVal);
+                          }}
+                          disabled={reqSourceType === 'store_room' && (item.maxAvailable ?? 0) <= 0}
+                          className={`h-10 rounded-xl text-xs font-semibold ${isOverStock || (reqSourceType === 'store_room' && (item.maxAvailable ?? 0) <= 0) ? 'border-destructive text-destructive' : ''}`}
                         />
                       </div>
 
@@ -516,7 +743,7 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                         <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1 block">
                           Unit
                         </Label>
-                        {reqSourceType === 'site' ? (
+                        {reqSourceType === 'site' || reqSourceType === 'store_room' ? (
                           <div className="h-10 px-3 bg-muted/40 rounded-xl border border-border/50 flex items-center text-xs font-semibold text-foreground">
                             {item.unit || 'Units'}
                           </div>
@@ -538,10 +765,42 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                       </div>
                     </div>
 
+                    {/* Store Room Stock Status & Alerts */}
+                    {reqSourceType === 'store_room' && item.name && (() => {
+                      const st = storeRoomCatalogItems.find(s => s.name === item.name);
+                      const currentStock = st?.stockQuantity ?? item.maxAvailable ?? 0;
+                      const minAlert = st?.minStockAlert ?? 5;
+
+                      if (currentStock <= 0) {
+                        return (
+                          <div className="p-2.5 bg-destructive/10 border border-destructive/30 rounded-xl text-xs text-destructive font-bold flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                            <span>❌ Out of Stock! 0 {item.unit} available in Store Room. You cannot enter or request this item.</span>
+                          </div>
+                        );
+                      }
+                      if (currentStock <= minAlert) {
+                        return (
+                          <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-800 dark:text-amber-300 font-semibold flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                            <span>⚠️ Minimum Stock Alert: Only {currentStock} {item.unit} available in Store Room (Min threshold: {minAlert}). Cannot enter more than {currentStock}.</span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1.5 px-1">
+                          <Check className="w-3.5 h-3.5" />
+                          <span>In Stock: {currentStock} {item.unit} available in Store Room ({st?.storeRoomLocation || 'Main Warehouse'})</span>
+                        </div>
+                      );
+                    })()}
+
                     {isOverStock && (
                       <div className="p-2 bg-destructive/10 border border-destructive/20 rounded-lg text-xs text-destructive font-semibold flex items-center gap-1.5">
                         <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span>Limited Stock! Cannot request more than {item.maxAvailable} {item.unit} available at the source site.</span>
+                        <span>
+                          Out of range! Cannot request more than {item.maxAvailable} {item.unit} available in {reqSourceType === 'store_room' ? 'Store Room' : 'source site'}.
+                        </span>
                       </div>
                     )}
                   </div>
@@ -573,9 +832,21 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
             />
           </div>
 
+          {reqSourceType === 'store_room' && reqItems.some(it => (it.maxAvailable ?? 0) <= 0 || Number(it.quantity) > (it.maxAvailable ?? 0)) && (
+            <p className="text-xs text-center text-destructive font-bold flex items-center justify-center gap-1.5">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              Cannot submit: One or more Store Room items are Out of Stock or have an out-of-range quantity.
+            </p>
+          )}
+
           <Button
             type="submit"
-            className="w-full h-12 rounded-xl text-white font-semibold text-sm gap-2 shadow-sm"
+            disabled={reqSourceType === 'store_room' && reqItems.some(it => (it.maxAvailable ?? 0) <= 0 || Number(it.quantity) > (it.maxAvailable ?? 0))}
+            onClick={(e) => {
+              e.preventDefault();
+              handleSubmitMaterialRequest(e);
+            }}
+            className="w-full h-12 rounded-xl text-white font-semibold text-sm gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
           >
             <Send className="w-4 h-4" /> Submit Requisition to Admin
@@ -640,6 +911,11 @@ export const MaterialRequestTab = ({ staff, mySites, initialSiteId }: MaterialRe
                       {req.sourceType === 'site' && (
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
                           <ArrowRightLeft className="w-3 h-3" /> From: {req.sourceSiteName || 'Another Site'}
+                        </span>
+                      )}
+                      {(req.sourceType === 'store_room' || req.isStoreRoom) && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
+                          <Warehouse className="w-3 h-3" /> Store Room Stock {req.startDate ? `· Start: ${req.startDate}` : ''}
                         </span>
                       )}
                     </div>

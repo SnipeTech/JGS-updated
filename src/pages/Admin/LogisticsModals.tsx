@@ -2,13 +2,14 @@ import { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
   Truck, Clock, CheckCircle2, IndianRupee, Package, ArrowRightLeft, AlertCircle,
-  Building2, User, Star, Check, Plus, Trash2, CreditCard, Info
+  Building2, User, Star, Check, Plus, Trash2, CreditCard, Info, Warehouse, Calendar,
+  PenLine
 } from 'lucide-react';
 import {
   MaterialRequest, MaterialRequestItem, Supplier, Staff, Vehicle, VEHICLE_TYPES, MaterialSetting, SupplierPaymentRecord
@@ -110,6 +111,46 @@ export const AssignMaterialModal = ({
 
   const displayedDrivers = showOnlyPresentDrivers ? presentDrivers : allDrivers;
 
+  // Check if a driver is currently assigned to an ongoing delivery or store room dispatch
+  const getDriverActiveTrip = (driverId: string) => {
+    const activeReq = (appContext.materialRequests || []).find(
+      r => r.status === 'assigned' && r.driverId === driverId && r.id !== request?.id
+    );
+    if (activeReq) {
+      return {
+        siteName: activeReq.siteName,
+        time: activeReq.startTime || activeReq.time,
+        vehicle: activeReq.vehicleNumber || activeReq.vehicle,
+        type: 'Material Requisition'
+      };
+    }
+    const activeDispatch = (appContext.storeRoomDispatches || []).find(
+      dis => dis.status === 'active' && dis.driverId === driverId
+    );
+    if (activeDispatch) {
+      return {
+        siteName: activeDispatch.siteName,
+        time: activeDispatch.time,
+        vehicle: activeDispatch.vehicleNumber,
+        type: 'Store Room Dispatch'
+      };
+    }
+    return null;
+  };
+
+  const { availableDrivers, assignedDrivers } = useMemo(() => {
+    const avail: Staff[] = [];
+    const assigned: Staff[] = [];
+    displayedDrivers.forEach(d => {
+      if (getDriverActiveTrip(d.id)) {
+        assigned.push(d);
+      } else {
+        avail.push(d);
+      }
+    });
+    return { availableDrivers: avail, assignedDrivers: assigned };
+  }, [displayedDrivers, appContext.materialRequests, appContext.storeRoomDispatches, request?.id]);
+
   const otherStaffMembers = useMemo(() => {
     return allStaff.filter(s => s.role !== 'driver');
   }, [allStaff]);
@@ -124,6 +165,10 @@ export const AssignMaterialModal = ({
   const displayedOtherStaff = showOnlyPresentDrivers ? presentOtherStaff : otherStaffMembers;
 
   const [assignStaffId, setAssignStaffId] = useState('');
+
+  const selectedDriverActiveTrip = useMemo(() => {
+    return assignStaffId ? getDriverActiveTrip(assignStaffId) : null;
+  }, [assignStaffId, appContext.materialRequests, appContext.storeRoomDispatches, request?.id]);
   const [assignSupplierId, setAssignSupplierId] = useState('');
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [assignVehicleType, setAssignVehicleType] = useState('Pickup');
@@ -257,7 +302,7 @@ export const AssignMaterialModal = ({
     setAssignPaymentNotes(request.supplierPaymentNotes || '');
 
     // 5. Prefill vehicle
-    if (request.vehicle) {
+    if (request.vehicle && request.vehicle !== 'No Vehicle Assigned' && request.vehicle !== 'none') {
       const match = vehicles.find(v => v.name === request.vehicle || v.number === request.vehicle);
       if (match) {
         setSelectedVehicleId(match.id);
@@ -268,20 +313,26 @@ export const AssignMaterialModal = ({
         setAssignVehicleType(request.vehicleType || 'Pickup');
         setAssignVehicleNumber(request.vehicleNumber || request.vehicle);
       }
+    } else if (request.vehicle === 'No Vehicle Assigned' || request.vehicle === 'none') {
+      setSelectedVehicleId('none');
+      setAssignVehicleType('Pickup');
+      setAssignVehicleNumber('');
     } else if (vehicles.length > 0) {
       setSelectedVehicleId(vehicles[0].id);
       setAssignVehicleType(vehicles[0].type);
       setAssignVehicleNumber(vehicles[0].number);
     } else {
-      setSelectedVehicleId('custom');
+      setSelectedVehicleId('none');
       setAssignVehicleType('Pickup');
       setAssignVehicleNumber('');
     }
-  }, [request, open, allStaff, allDrivers, suppliers, vehicles, allMaterials, matchingSuppliers]);
+  }, [request?.id, open]);
 
   const handleSelectVehicle = (id: string) => {
     setSelectedVehicleId(id);
     if (id === 'custom') {
+      setAssignVehicleNumber('');
+    } else if (id === 'none') {
       setAssignVehicleNumber('');
     } else {
       const v = vehicles.find(item => item.id === id);
@@ -345,12 +396,16 @@ export const AssignMaterialModal = ({
     }
 
     const isInterSite = request.sourceType === 'site';
+    const isStoreRoom = request.sourceType === 'store_room' || request.isStoreRoom;
     let supplierName = '';
     let finalSupplierId = '';
 
     if (isInterSite) {
       supplierName = request.sourceSiteName || 'Site Transfer';
       finalSupplierId = request.sourceSiteId || 'site-transfer';
+    } else if (isStoreRoom) {
+      supplierName = request.sourceSiteName || 'Store Room / Warehouse';
+      finalSupplierId = 'store_room';
     } else {
       const sup = suppliers.find(s => s.id === assignSupplierId);
       if (!sup) {
@@ -361,13 +416,12 @@ export const AssignMaterialModal = ({
       finalSupplierId = sup.id;
     }
 
-    if (!assignVehicleNumber.trim()) {
-      toast.error('Please enter vehicle number');
-      return;
-    }
-
+    // Vehicle assignment is optional
+    const hasVehicle = selectedVehicleId !== 'none' && assignVehicleNumber.trim().length > 0;
     const matchedVeh = vehicles.find(v => v.id === selectedVehicleId);
-    const vehicleLabel = matchedVeh ? matchedVeh.name : `${assignVehicleType} (${assignVehicleNumber.trim()})`;
+    const vehicleLabel = hasVehicle
+      ? (matchedVeh ? matchedVeh.name : `${assignVehicleType} (${assignVehicleNumber.trim()})`)
+      : 'No Vehicle Assigned';
 
     const existingPaid = request.supplierPaidAmount || 0;
     const existingPayments = request.supplierPayments || [];
@@ -378,8 +432,8 @@ export const AssignMaterialModal = ({
       supplierId: finalSupplierId,
       supplierName: supplierName,
       vehicle: vehicleLabel,
-      vehicleType: assignVehicleType,
-      vehicleNumber: assignVehicleNumber.trim(),
+      vehicleType: hasVehicle ? assignVehicleType : 'None',
+      vehicleNumber: hasVehicle ? assignVehicleNumber.trim() : '',
       startTime: assignStartTime || format(new Date(), 'hh:mm a'),
       supplierPaymentMethod: request.supplierPaymentMethod,
       supplierPaymentDate: request.supplierPaymentDate,
@@ -393,6 +447,7 @@ export const AssignMaterialModal = ({
   };
 
   const isInterSite = request?.sourceType === 'site';
+  const isStoreRoom = request?.sourceType === 'store_room' || request?.isStoreRoom;
   const currentSelectedSupplier = suppliers.find(s => s.id === assignSupplierId);
   const assignedStaffObj = allStaff.find(s => s.id === assignStaffId);
 
@@ -404,7 +459,7 @@ export const AssignMaterialModal = ({
             <Truck className="w-4 h-4 text-primary" />
             {request?.driverId || request?.driverName
               ? 'Reassign Driver & Supplier Logistics'
-              : (isInterSite ? 'Dispatch Inter-Site Material Transfer' : 'Material Dispatch: Assign Staff & Supplier')}
+              : (isStoreRoom ? 'Dispatch Store Room Warehouse Item' : isInterSite ? 'Dispatch Inter-Site Material Transfer' : 'Material Dispatch: Assign Staff & Supplier')}
           </DialogTitle>
           <p className="text-xs text-muted-foreground mt-0.5">
             Destination Site: <strong className="text-foreground">{request?.siteName}</strong>
@@ -460,22 +515,71 @@ export const AssignMaterialModal = ({
                     <SelectValue placeholder="Select Staff / Driver" />
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
-                    {displayedDrivers.length > 0 && (
-                      <div className="px-2 py-1 text-[10px] font-bold uppercase text-primary bg-primary/10 flex items-center justify-between">
+                    {/* PRIMARY: Available Drivers (Not Currently Assigned) */}
+                    <SelectGroup>
+                      <SelectLabel className="px-2 py-1 text-[10px] font-extrabold uppercase text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 flex items-center justify-between my-0.5 rounded-md">
                         <span className="flex items-center gap-1">
-                          <Truck className="w-3 h-3 text-primary" /> Company Drivers {showOnlyPresentDrivers ? '(Present Today)' : ''}
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Available Drivers (Ready for Dispatch)
                         </span>
-                        <span className="text-[9px] font-semibold opacity-75">{displayedDrivers.length} Available</span>
-                      </div>
+                        <span className="text-[9px] font-bold">({availableDrivers.length} Free)</span>
+                      </SelectLabel>
+                      {availableDrivers.map(d => {
+                        const isPresent = isStaffPresentToday(d.id);
+                        return (
+                          <SelectItem key={d.id} value={d.id}>
+                            <div className="flex items-center justify-between gap-3 w-full">
+                              <span>🚚 {d.name} {d.phone ? `(${d.phone})` : ''}</span>
+                              <div className="flex items-center gap-1">
+                                {d.perDaySalary ? <span className="text-[10px] text-muted-foreground font-mono">₹{d.perDaySalary}/d</span> : null}
+                                {isPresent && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-800 dark:text-emerald-300">
+                                    ✓ Present
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </SelectItem>
+                        );
+                      })}
+                      {availableDrivers.length === 0 && (
+                        <div className="p-2 text-center text-[11px] text-muted-foreground italic">
+                          No unassigned drivers currently free.
+                        </div>
+                      )}
+                    </SelectGroup>
+
+                    {/* SECONDARY: Currently Assigned / In-Transit Drivers */}
+                    {assignedDrivers.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel className="px-2 py-1 text-[10px] font-extrabold uppercase text-amber-700 dark:text-amber-400 bg-amber-500/10 flex items-center justify-between mt-2 mb-1 rounded-md border-t border-amber-500/20">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-amber-600" /> Currently Assigned / In-Transit (Secondary)
+                          </span>
+                          <span className="text-[9px] font-bold">({assignedDrivers.length} On Trip)</span>
+                        </SelectLabel>
+                        {assignedDrivers.map(d => {
+                          const activeTrip = getDriverActiveTrip(d.id);
+                          const isPresent = isStaffPresentToday(d.id);
+                          return (
+                            <SelectItem key={d.id} value={d.id}>
+                              <div className="flex items-center justify-between gap-3 w-full opacity-85">
+                                <span>🚚 {d.name} {d.phone ? `(${d.phone})` : ''}</span>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30">
+                                    ⚠️ Assigned · {activeTrip?.siteName || 'Active Trip'}
+                                  </span>
+                                  {isPresent && (
+                                    <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                                      ✓
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectGroup>
                     )}
-                    {displayedDrivers.map(d => {
-                      const isPresent = isStaffPresentToday(d.id);
-                      return (
-                        <SelectItem key={d.id} value={d.id}>
-                          🚚 {d.name} ({d.phone || 'Driver'}) {d.perDaySalary ? `· ₹${d.perDaySalary}/day` : ''} {isPresent ? '✓ (Present)' : ''}
-                        </SelectItem>
-                      );
-                    })}
 
                     {displayedDrivers.length === 0 && (
                       <div className="p-2.5 text-center text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 rounded-lg m-1">
@@ -500,10 +604,25 @@ export const AssignMaterialModal = ({
                 </Select>
               )}
 
+              {/* Secondary Assigned Warning Banner if Selected */}
+              {selectedDriverActiveTrip && (
+                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2 mt-2 animate-slide-up">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Secondary Driver Selected:</span>
+                    <p className="text-[11px] mt-0.5">
+                      This driver is currently on an active delivery to <strong>{selectedDriverActiveTrip.siteName}</strong>
+                      {selectedDriverActiveTrip.time ? ` (Departure: ${selectedDriverActiveTrip.time})` : ''}.
+                      Assigning will schedule an additional delivery for them.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {presentDrivers.length > 0 ? (
                 <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1 font-medium">
                   <CheckCircle2 className="w-3 h-3 shrink-0" />
-                  Showing {presentDrivers.length} driver(s) verified present on duty today.
+                  Showing {availableDrivers.length} free driver(s) and {assignedDrivers.length} currently assigned driver(s).
                 </p>
               ) : (
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
@@ -513,16 +632,17 @@ export const AssignMaterialModal = ({
               )}
             </div>
 
-            {/* Vehicle Selection */}
+            {/* Vehicle Selection (Optional) */}
             <div>
               <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
-                <Truck className="w-3.5 h-3.5 text-primary" /> Select Dispatch Fleet Vehicle *
+                <Truck className="w-3.5 h-3.5 text-primary" /> Select Dispatch Fleet Vehicle (Optional)
               </Label>
               <Select value={selectedVehicleId} onValueChange={handleSelectVehicle}>
                 <SelectTrigger className="mt-1 h-11 rounded-xl">
-                  <SelectValue placeholder="Select Vehicle" />
+                  <SelectValue placeholder="Select Vehicle (Optional)" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="none">🚫 No Vehicle / Direct Transport (Optional)</SelectItem>
                   {vehicles.map(v => (
                     <SelectItem key={v.id} value={v.id}>
                       🚗 {v.name} ({v.type}) — {v.number}
@@ -630,7 +750,57 @@ export const AssignMaterialModal = ({
                 </span>
               </div>
 
-              {isInterSite ? (
+              {isStoreRoom ? (
+                <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                      <Warehouse className="w-4 h-4 text-emerald-600" /> Store Room / Warehouse Stock Fulfillment
+                    </div>
+                    <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full">
+                      Deducted upon Driver Assignment
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Assigning a driver will automatically deduct the requested stock from Store Room inventory and begin deployment tracking.
+                    {request?.startDate && <span> (Deployed date: <strong className="text-foreground">{request.startDate}</strong>)</span>}
+                  </p>
+
+                  {/* Stock inspection list */}
+                  <div className="space-y-1.5 pt-1">
+                    {requestedProducts.map((it, idx) => {
+                      const mat = allMaterials.find(m => m.name.toLowerCase() === it.name.trim().toLowerCase());
+                      const currentStock = mat?.stockQuantity ?? 0;
+                      const minAlert = mat?.minStockAlert ?? 5;
+                      const isLow = currentStock <= minAlert;
+                      const isOver = Number(it.quantity || 0) > currentStock;
+
+                      return (
+                        <div key={idx} className="p-2.5 rounded-xl bg-background/90 border border-border/60 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-bold text-foreground">{it.name}</span>
+                            <span className="text-muted-foreground ml-1.5">({it.quantity} {it.unit} requested)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[11px] font-mono font-bold ${isOver ? 'text-destructive' : isLow ? 'text-amber-600' : 'text-emerald-600'}`}>
+                              Available in Store Room: {currentStock} {it.unit}
+                            </span>
+                            {isOver && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-destructive/10 text-destructive font-bold flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" /> Insufficient Stock!
+                              </span>
+                            )}
+                            {isLow && !isOver && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 font-bold flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" /> Low Stock (Min: {minAlert})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : isInterSite ? (
                 <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 space-y-1">
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-700 dark:text-amber-300">
                     <ArrowRightLeft className="w-4 h-4" /> Inter-Site Material Transfer
@@ -766,14 +936,18 @@ export const AssignMaterialModal = ({
 
           <Button
             type="submit"
-            disabled={!assignStaffId || allStaff.length === 0 || (!isInterSite && suppliers.length === 0)}
+            onClick={(e) => {
+              e.preventDefault();
+              handleConfirmAssign(e);
+            }}
+            disabled={!assignStaffId || allStaff.length === 0 || (!isInterSite && !isStoreRoom && suppliers.length === 0)}
             className="w-full h-11 rounded-xl text-white font-semibold text-sm gap-2 shadow-sm"
             style={{ background: 'linear-gradient(135deg, hsl(38 72% 38%), hsl(32 85% 50%))' }}
           >
             <Truck className="w-4 h-4" />{' '}
             {request?.driverId || request?.driverName
               ? 'Confirm Reassignment & Save Changes'
-              : (isInterSite ? 'Confirm & Dispatch Inter-Site Transfer' : 'Confirm Staff Assignment & Supplier Dispatch')}
+              : (isInterSite ? 'Confirm & Dispatch Inter-Site Transfer' : isStoreRoom ? 'Confirm Driver & Dispatch Store Room Item' : 'Confirm Staff Assignment & Supplier Dispatch')}
           </Button>
         </form>
       </DialogContent>
@@ -793,6 +967,7 @@ export interface CompleteMaterialModalProps {
       startTime?: string;
       endTime: string;
       completionTime?: string;
+      deliveryDate?: string;
       duration?: string;
       durationHours?: number;
       driverWage?: number;
@@ -828,6 +1003,8 @@ export const CompleteMaterialModal = ({
   staffList = [],
   onComplete
 }: CompleteMaterialModalProps) => {
+  const isStoreRoom = request?.isStoreRoom || request?.sourceType === 'store_room';
+  const [compDeliveryDate, setCompDeliveryDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [compPetrol, setCompPetrol] = useState('');
   const [compNotes, setCompNotes] = useState('');
   const [compItems, setCompItems] = useState<MaterialRequestItem[]>([]);
@@ -880,6 +1057,7 @@ export const CompleteMaterialModal = ({
     if (!request || !open) return;
     setCompPetrol(request.petrolCharge !== undefined && request.petrolCharge !== null ? request.petrolCharge.toString() : '');
     setCompNotes(request.completionNotes || '');
+    setCompDeliveryDate(request.deliveryDate || request.startDate || format(new Date(), 'yyyy-MM-dd'));
 
     const initialItems = (request.items || []).map(it => {
       let supRate = it.supplierRate !== undefined ? it.supplierRate : it.rate;
@@ -1105,6 +1283,40 @@ export const CompleteMaterialModal = ({
     e.preventDefault();
     if (!request) return;
 
+    if (isStoreRoom) {
+      const delivDate = compDeliveryDate || format(new Date(), 'yyyy-MM-dd');
+      onComplete(request.id, {
+        deliveryDate: delivDate,
+        startTime: undefined,
+        endTime: undefined,
+        completionTime: undefined,
+        duration: undefined,
+        durationHours: undefined,
+        driverWage: 0,
+        driverHourlyRate: 0,
+        items: request.items || compItems,
+        gstType: 'none',
+        cgstAmount: 0,
+        sgstAmount: 0,
+        igstAmount: 0,
+        gstAmount: 0,
+        materialCost: 0,
+        supplierMaterialCost: 0,
+        supplierPrice: 0,
+        clientMaterialCost: 0,
+        customerMaterialCost: 0,
+        totalCost: 0,
+        clientTotalCost: 0,
+        customerTotalCost: 0,
+        petrolCharge: 0,
+        completionNotes: compNotes.trim() || undefined
+      });
+
+      toast.success(`Store Room material confirmed delivered to ${request.siteName}! Active duration tracking starts from ${delivDate}.`);
+      onOpenChange(false);
+      return;
+    }
+
     const finalItems = compItems.map(it => {
       const q = Number(it.quantity) || 0;
       const r = Number(it.supplierRate ?? it.rate ?? 0);
@@ -1136,6 +1348,7 @@ export const CompleteMaterialModal = ({
     const effectiveGstType = hasIgst ? 'igst' : (hasCgstSgst ? 'cgst_sgst' : 'none');
 
     onComplete(request.id, {
+      deliveryDate: format(new Date(), 'yyyy-MM-dd'),
       startTime: undefined,
       endTime: undefined,
       completionTime: undefined,
@@ -1172,9 +1385,13 @@ export const CompleteMaterialModal = ({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <DialogTitle className="text-lg font-heading font-black flex items-center gap-2.5 text-foreground">
               <span className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-600 flex items-center justify-center shadow-xs">
-                {isAlreadyCompleted ? <PenLine className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+                {isStoreRoom ? <Warehouse className="w-5 h-5" /> : isAlreadyCompleted ? <PenLine className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
               </span>
-              {isAlreadyCompleted ? 'Edit Delivery Rates, Product Taxes & Billing' : 'Complete Delivery & Finalize Billing'}
+              {isStoreRoom
+                ? 'Confirm Store Room Material Delivery'
+                : isAlreadyCompleted
+                  ? 'Edit Delivery Rates, Product Taxes & Billing'
+                  : 'Complete Delivery & Finalize Billing'}
             </DialogTitle>
           </div>
           <div className="flex flex-wrap items-center gap-2 mt-2 pt-1 text-xs">
@@ -1193,19 +1410,110 @@ export const CompleteMaterialModal = ({
         </DialogHeader>
 
         <form onSubmit={handleConfirmComplete} className="space-y-4 mt-3">
-          {/* Rate Clarification Banner */}
-          <div className="p-3.5 rounded-2xl bg-muted/40 border border-border/70 text-xs space-y-1.5">
-            <div className="flex items-center gap-2 font-bold text-foreground">
-              <Info className="w-4 h-4 text-primary shrink-0" />
-              <span>Product Pricing & Separate CGST / SGST Rates</span>
-            </div>
-            <div className="pt-1 text-[11px] text-muted-foreground">
-              Admin can set purchase rates and customize CGST (%) and SGST (%) separately for each product item.
-            </div>
-          </div>
+          {isStoreRoom ? (
+            <div className="space-y-4">
+              {/* Store Room Explanation Banner */}
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 space-y-2">
+                <div className="flex items-center gap-2 font-bold text-sm text-foreground">
+                  <Warehouse className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Store Room Material Delivery (Company Owned Asset)</span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  This product is company-owned inventory dispatched from the Store Room. There is <strong>no vendor purchase cost</strong> and <strong>no GST/taxes</strong>. Confirming delivery marks it arrived on site and begins the active duration cycle.
+                </p>
+                <div className="p-2.5 rounded-xl bg-background/80 border border-emerald-500/20 text-[11px] text-emerald-800 dark:text-emerald-300 font-medium flex items-center gap-2">
+                  <Info className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Daily usage fee (Duration on site × Per Day Rate) will be calculated when the item is returned to Store Room or transferred to another site.</span>
+                </div>
+              </div>
 
-          {/* Materials Breakdown */}
-          <div className="space-y-3 bg-muted/20 p-4 rounded-2xl border border-border/60">
+              {/* Delivery Date Picker */}
+              <div className="p-4 rounded-2xl bg-muted/20 border border-border/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-emerald-600" /> Delivery Date (Arrival at Site) *
+                  </Label>
+                  <button
+                    type="button"
+                    onClick={() => setCompDeliveryDate(format(new Date(), 'yyyy-MM-dd'))}
+                    className="text-[10px] font-bold text-emerald-600 hover:underline"
+                  >
+                    Today
+                  </button>
+                </div>
+                <Input
+                  type="date"
+                  value={compDeliveryDate}
+                  onChange={e => setCompDeliveryDate(e.target.value)}
+                  className="h-11 rounded-xl text-xs font-semibold"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  The on-site usage duration will be counted starting from this delivery date until the item is returned or transferred.
+                </p>
+              </div>
+
+              {/* Items Delivered Summary */}
+              <div className="p-4 rounded-2xl bg-muted/20 border border-border/60 space-y-2">
+                <Label className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <Package className="w-3.5 h-3.5 text-primary" /> Products Delivered to Site
+                </Label>
+                <div className="space-y-2">
+                  {(request?.items || []).map((it, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-3 rounded-xl bg-card border border-border/50 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-bold text-[11px]">
+                          {idx + 1}
+                        </span>
+                        <span className="font-bold text-foreground">{it.name}</span>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-bold text-xs">
+                        {it.quantity} {it.unit || 'Units'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">Delivery Notes / Remarks (Optional)</Label>
+                <Textarea
+                  placeholder="e.g. Delivered in good condition to site supervisor..."
+                  value={compNotes}
+                  onChange={e => setCompNotes(e.target.value)}
+                  rows={2}
+                  className="text-xs resize-none rounded-xl"
+                />
+              </div>
+
+              {/* Submit Button */}
+              <Button
+                type="submit"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleConfirmComplete(e);
+                }}
+                className="w-full h-11 rounded-2xl text-white font-bold text-sm gap-2 shadow-md hover:shadow-lg transition-all"
+                style={{ background: 'linear-gradient(135deg, hsl(142 71% 36%), hsl(158 64% 40%))' }}
+              >
+                <CheckCircle2 className="w-4 h-4" /> Confirm Delivery to Site
+              </Button>
+            </div>
+          ) : (
+            <>
+              {/* Rate Clarification Banner */}
+              <div className="p-3.5 rounded-2xl bg-muted/40 border border-border/70 text-xs space-y-1.5">
+                <div className="flex items-center gap-2 font-bold text-foreground">
+                  <Info className="w-4 h-4 text-primary shrink-0" />
+                  <span>Product Pricing & Separate CGST / SGST Rates</span>
+                </div>
+                <div className="pt-1 text-[11px] text-muted-foreground">
+                  Admin can set purchase rates and customize CGST (%) and SGST (%) separately for each product item.
+                </div>
+              </div>
+
+              {/* Materials Breakdown */}
+              <div className="space-y-3 bg-muted/20 p-4 rounded-2xl border border-border/60">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <div className="w-6 h-6 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
@@ -1615,6 +1923,8 @@ export const CompleteMaterialModal = ({
               </>
             )}
           </Button>
+            </>
+          )}
         </form>
       </DialogContent>
     </Dialog>

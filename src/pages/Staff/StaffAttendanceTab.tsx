@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { format, addDays } from 'date-fns';
 import {
   CalendarDays, Clock, Users, UserCircle, Truck, ChevronLeft, ChevronRight,
-  Plus, Minus, AlertCircle, Trash2, MapPin, CheckCircle2, IndianRupee, Search
+  Plus, Minus, AlertCircle, Trash2, MapPin, CheckCircle2, IndianRupee, Search, Send, Lock
 } from 'lucide-react';
 import { Staff } from '@/types';
 
@@ -60,41 +60,6 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
     return !!supervisorAtt?.isSubmitted;
   }, [staff?.id, supervisorAtt?.isSubmitted]);
 
-  // Local state for expense fields to guarantee instant, lag-free typing
-  const [localExpenseAmount, setLocalExpenseAmount] = useState<string>('');
-  const [localExpenseNotes, setLocalExpenseNotes] = useState<string>('');
-  const [localPaymentMethod, setLocalPaymentMethod] = useState<string>('Cash');
-  const saveExpenseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    setLocalExpenseAmount(supervisorAtt?.expenseAmount ? String(supervisorAtt.expenseAmount) : '');
-    setLocalExpenseNotes(supervisorAtt?.expenseNotes || '');
-    setLocalPaymentMethod(supervisorAtt?.expensePaymentMethod || 'Cash');
-  }, [attendanceDate, staff?.id, supervisorAtt?.id]);
-
-  const commitExpense = (amountStr: string, notesStr: string, methodStr: string) => {
-    if (!staff?.id) return;
-    const current = supervisorAtt || { staffId: staff.id, date: attendanceDate, status: 'present' };
-    saveAttendance({
-      ...current,
-      expenseAmount: Number(amountStr) || 0,
-      expenseNotes: notesStr,
-      expensePaymentMethod: methodStr
-    });
-  };
-
-  const handleExpenseChange = (amountStr: string, notesStr: string, methodStr: string) => {
-    setLocalExpenseAmount(amountStr);
-    setLocalExpenseNotes(notesStr);
-    setLocalPaymentMethod(methodStr);
-
-    if (saveExpenseTimeoutRef.current) {
-      clearTimeout(saveExpenseTimeoutRef.current);
-    }
-    saveExpenseTimeoutRef.current = setTimeout(() => {
-      commitExpense(amountStr, notesStr, methodStr);
-    }, 300);
-  };
 
   const handleSubmitDay = () => {
     if (!staff?.id) return;
@@ -292,8 +257,16 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                                       </span>
                                     )}
                                     {log.expenseAmount && log.expenseAmount > 0 ? (
-                                      <span className="font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md border border-amber-500/20 flex items-center gap-1">
-                                        <IndianRupee className="w-3 h-3 text-amber-600" /> ₹{log.expenseAmount.toLocaleString()} Site Expense {log.expensePaymentMethod ? `[${log.expensePaymentMethod}]` : ''} {log.expenseNotes ? `(${log.expenseNotes})` : ''}
+                                      <span className={`font-semibold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                                        log.expenseStatus === 'paid'
+                                          ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 border-emerald-500/25'
+                                          : log.expenseStatus === 'rejected'
+                                            ? 'text-destructive bg-destructive/10 border-destructive/25'
+                                            : 'text-amber-700 dark:text-amber-300 bg-amber-500/10 border-amber-500/25'
+                                      }`}>
+                                        <IndianRupee className="w-3 h-3" /> ₹{log.expenseAmount.toLocaleString()} Claim ({
+                                          log.expenseStatus === 'paid' ? 'Paid' : log.expenseStatus === 'rejected' ? 'Rejected' : 'Pending Review'
+                                        }) {log.expensePaymentMethod ? `[${log.expensePaymentMethod}]` : ''} {log.expenseNotes ? `(${log.expenseNotes})` : ''}
                                       </span>
                                     ) : null}
                                   </div>
@@ -620,68 +593,6 @@ export const StaffAttendanceTab = ({ staff }: StaffAttendanceTabProps) => {
                             })()}
                           </div>
 
-                          {/* Site Daily Expense for this working site */}
-                          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                              <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                                <IndianRupee className="w-3.5 h-3.5 text-amber-600" />
-                                {att?.siteId
-                                  ? `Today's Site Expense (Saved on ${sites.find(st => st.id === att.siteId)?.name || 'this site'})`
-                                  : "Today's Site Expense"}
-                              </Label>
-                              <span className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold">
-                                {att?.siteId ? `✓ Automatically recorded & saved to site finances` : 'Assign site above to allocate this expense'}
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                              <div>
-                                <Label className="text-[10px] font-bold text-muted-foreground uppercase">Expense Amount (₹)</Label>
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  placeholder="0"
-                                  disabled={isDaySubmitted}
-                                  value={localExpenseAmount}
-                                  onChange={e => handleExpenseChange(e.target.value, localExpenseNotes, localPaymentMethod)}
-                                  onBlur={() => commitExpense(localExpenseAmount, localExpenseNotes, localPaymentMethod)}
-                                  className="h-9 text-xs rounded-xl bg-card border-border/60 font-bold text-foreground mt-1"
-                                />
-                              </div>
-                              <div>
-                                <Label className="text-[10px] font-bold text-muted-foreground uppercase">Payment Method</Label>
-                                <Select
-                                  value={localPaymentMethod}
-                                  disabled={isDaySubmitted}
-                                  onValueChange={(val) => {
-                                    handleExpenseChange(localExpenseAmount, localExpenseNotes, val);
-                                    commitExpense(localExpenseAmount, localExpenseNotes, val);
-                                  }}
-                                >
-                                  <SelectTrigger className="h-9 text-xs rounded-xl bg-card border-border/60 mt-1">
-                                    <SelectValue placeholder="Mode" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="Cash">💵 Cash</SelectItem>
-                                    <SelectItem value="UPI">📱 UPI / GPay / PhonePe</SelectItem>
-                                    <SelectItem value="Bank Transfer">🏦 Bank Transfer</SelectItem>
-                                    <SelectItem value="Card">💳 Card</SelectItem>
-                                    <SelectItem value="Cheque">📝 Cheque</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div className="sm:col-span-2">
-                                <Label className="text-[10px] font-bold text-muted-foreground uppercase">Expense Notes / Purpose</Label>
-                                <Input
-                                  placeholder="e.g. Travel/petrol, site tools/materials, tea & snacks, conveyance"
-                                  disabled={isDaySubmitted}
-                                  value={localExpenseNotes}
-                                  onChange={e => handleExpenseChange(localExpenseAmount, e.target.value, localPaymentMethod)}
-                                  onBlur={() => commitExpense(localExpenseAmount, localExpenseNotes, localPaymentMethod)}
-                                  className="h-9 text-xs rounded-xl bg-card border-border/60 mt-1"
-                                />
-                              </div>
-                            </div>
-                          </div>
                         </div>
                       )}
                     </Card>

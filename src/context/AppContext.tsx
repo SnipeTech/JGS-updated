@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
-import { Staff, Site, DailyLog, AppState, Customer, Product, Quotation, Invoice, Vendor, WorkEntry, Attendance, Supplier, MaterialRequest, Vehicle, VehicleMaintenanceRecord, MaterialRental, StageCompletionRequest, MaterialSetting } from '@/types';
+import { Staff, Site, DailyLog, AppState, Customer, Product, Quotation, Invoice, Vendor, WorkEntry, Attendance, Supplier, MaterialRequest, Vehicle, VehicleMaintenanceRecord, MaterialRental, StageCompletionRequest, MaterialSetting, StoreRoomDispatchRecord, CrushedStockRecord } from '@/types';
 import { calculateDuration } from '@/lib/utils';
 import { format } from 'date-fns';
 
@@ -41,8 +41,12 @@ interface AppContextType extends AppState {
   deleteVendor: (id: string) => void;
   // Work Entries
   addWorkEntry: (entry: Omit<WorkEntry, 'id'>) => void;
-  // Attendances
+  // Attendances & Supervisor Expense Claims
   saveAttendance: (data: Omit<import('@/types').Attendance, 'id'> & { id?: string }) => void;
+  submitSupervisorExpenseClaim: (data: { staffId: string; date: string; amount: number; notes?: string; paymentMethod?: string; siteId?: string; siteName?: string }) => void;
+  deleteSupervisorExpenseClaim: (staffId: string, date: string) => void;
+  verifyAndPaySupervisorExpense: (staffId: string, date: string, options?: { paidAmount?: number; paymentMethod?: string; notes?: string }) => void;
+  rejectSupervisorExpense: (staffId: string, date: string, reason?: string) => void;
   // Material Settings
   addMaterialSetting: (setting: Omit<import('@/types').MaterialSetting, 'id'>) => void;
   updateMaterialSetting: (id: string, setting: Partial<import('@/types').MaterialSetting>) => void;
@@ -65,7 +69,7 @@ interface AppContextType extends AppState {
   updateVehicleMaintenance: (id: string, updates: Partial<VehicleMaintenanceRecord>) => void;
   deleteVehicleMaintenance: (id: string) => void;
   // Material Requests
-  addMaterialRequest: (request: Omit<MaterialRequest, 'id' | 'status'>) => void;
+  addMaterialRequest: (request: Omit<MaterialRequest, 'id' | 'status'> & { id?: string; status?: MaterialRequest['status'] }) => string;
   updateMaterialRequest: (id: string, updates: Partial<MaterialRequest>) => void;
   deleteMaterialRequest: (id: string) => void;
   assignMaterialRequest: (id: string, assignment: { driverId: string; driverName: string; supplierId: string; supplierName: string; vehicle?: string; vehicleNumber?: string; vehicleType?: string; startTime?: string; supplierPrice?: number; supplierPaidAmount?: number; supplierBalance?: number }) => void;
@@ -73,6 +77,7 @@ interface AppContextType extends AppState {
     startTime?: string;
     endTime?: string;
     completionTime?: string;
+    deliveryDate?: string;
     duration?: string;
     durationHours?: number;
     driverWage?: number;
@@ -112,6 +117,15 @@ interface AppContextType extends AppState {
   stageCompletionRequests: StageCompletionRequest[];
   addStageCompletionRequest: (request: Omit<StageCompletionRequest, 'id'>) => void;
   updateStageCompletionRequest: (id: string, updates: Partial<StageCompletionRequest>) => void;
+  // Store Room Dispatches
+  storeRoomDispatches: StoreRoomDispatchRecord[];
+  addStoreRoomDispatch: (dispatch: Omit<StoreRoomDispatchRecord, 'id' | 'createdAt'>) => void;
+  updateStoreRoomDispatch: (id: string, updates: Partial<StoreRoomDispatchRecord>) => void;
+  // Crushed Stock History
+  crushedStockHistory: CrushedStockRecord[];
+  addCrushedStockRecord: (record: Omit<CrushedStockRecord, 'id' | 'createdAt'>) => void;
+  deleteCrushedStockRecord: (id: string) => void;
+  restoreCrushedStockRecord: (id: string) => void;
   currentPortal: 'admin' | 'staff';
   switchPortal: (portal: 'admin' | 'staff') => void;
 }
@@ -160,6 +174,8 @@ const defaultState: AppState = {
   unitMaster: DEFAULT_UNITS,
   materialRentals: [],
   stageCompletionRequests: [],
+  storeRoomDispatches: [],
+  crushedStockHistory: [],
   currentUser: null,
 };
 
@@ -233,19 +249,43 @@ function getStoredUser() {
   return null;
 }
 
+function getDeletedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem('edamari_deleted_ids');
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function recordDeletedId(id: string) {
+  try {
+    const s = getDeletedIds();
+    s.add(id);
+    localStorage.setItem('edamari_deleted_ids', JSON.stringify(Array.from(s)));
+  } catch {}
+}
+
 function mergeById<T extends { id?: string; key?: string }>(backendItems: T[] | undefined, localItems: T[] | undefined): T[] {
-  const bList = Array.isArray(backendItems) ? backendItems : [];
-  const lList = Array.isArray(localItems) ? localItems : [];
+  const deletedIds = getDeletedIds();
+  const bList = (Array.isArray(backendItems) ? backendItems : []).filter(item => {
+    const k = item?.id || item?.key;
+    return !k || !deletedIds.has(k);
+  });
+  const lList = (Array.isArray(localItems) ? localItems : []).filter(item => {
+    const k = item?.id || item?.key;
+    return !k || !deletedIds.has(k);
+  });
   if (bList.length === 0) return lList;
   if (lList.length === 0) return bList;
   const map = new Map<string, T>();
   lList.forEach(item => {
     const k = item?.id || item?.key;
-    if (k) map.set(k, item);
+    if (k && !deletedIds.has(k)) map.set(k, item);
   });
   bList.forEach(item => {
     const k = item?.id || item?.key;
-    if (k) {
+    if (k && !deletedIds.has(k)) {
       const existing = map.get(k);
       if (existing) {
         map.set(k, {
@@ -268,6 +308,12 @@ function loadState(): AppState {
     const saved = localStorage.getItem('edamari_data');
     if (saved) {
       const parsed = JSON.parse(saved);
+      const deletedIds = getDeletedIds();
+      const sanitizeList = (list: any[]): any[] => {
+        if (!Array.isArray(list)) return [];
+        return list.filter(item => !item?.id || !deletedIds.has(item.id));
+      };
+
       if (Array.isArray(parsed.staffList)) {
         parsed.staffList = parsed.staffList.filter((s: any) => s.id !== 'staff_1772771203700');
       }
@@ -278,11 +324,24 @@ function loadState(): AppState {
       return {
         ...defaultState,
         ...parsed,
-        materialSettings: Array.isArray(parsed.materialSettings) && parsed.materialSettings.length > 0 ? parsed.materialSettings : DEFAULT_MATERIAL_SETTINGS,
-        vehicles: Array.isArray(parsed.vehicles) ? parsed.vehicles : [],
-        vehicleMaintenance: Array.isArray(parsed.vehicleMaintenance) ? parsed.vehicleMaintenance : [],
-        dailyLogs: sanitizeDailyLogs(parsed.dailyLogs || []),
+        staffList: sanitizeList(parsed.staffList || []),
+        sites: sanitizeList(parsed.sites || []),
+        customers: sanitizeList(parsed.customers || []),
+        products: sanitizeList(parsed.products || []),
+        quotations: sanitizeList(parsed.quotations || []),
+        manualExpenses: sanitizeList(parsed.manualExpenses || []),
+        vendors: sanitizeList(parsed.vendors || []),
+        workEntries: sanitizeList(parsed.workEntries || []),
+        materialSettings: sanitizeList(Array.isArray(parsed.materialSettings) && parsed.materialSettings.length > 0 ? parsed.materialSettings : DEFAULT_MATERIAL_SETTINGS),
+        suppliers: sanitizeList(parsed.suppliers || []),
+        vehicles: sanitizeList(parsed.vehicles || []),
+        vehicleMaintenance: sanitizeList(parsed.vehicleMaintenance || []),
+        materialRequests: sanitizeList(parsed.materialRequests || []),
+        materialRentals: sanitizeList(parsed.materialRentals || []),
+        dailyLogs: sanitizeDailyLogs(sanitizeList(parsed.dailyLogs || [])),
         unitMaster: parsed.unitMaster && parsed.unitMaster.length > 0 ? parsed.unitMaster : DEFAULT_UNITS,
+        storeRoomDispatches: sanitizeList(parsed.storeRoomDispatches || []),
+        crushedStockHistory: sanitizeList(parsed.crushedStockHistory || []),
         currentUser: savedUser,
       };
     }
@@ -350,9 +409,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 materialRequests: mergeById(backendState.materialRequests, prev.materialRequests),
                 materialRentals: mergeById(backendState.materialRentals, prev.materialRentals),
                 stageCompletionRequests: mergeById(backendState.stageCompletionRequests, prev.stageCompletionRequests),
-                materialSettings: Array.isArray(backendState.materialSettings) && backendState.materialSettings.length > 0
-                  ? backendState.materialSettings
-                  : (prev.materialSettings && prev.materialSettings.length > 0 ? prev.materialSettings : DEFAULT_MATERIAL_SETTINGS),
+                materialSettings: mergeById(backendState.materialSettings, prev.materialSettings),
+                storeRoomDispatches: mergeById(backendState.storeRoomDispatches, prev.storeRoomDispatches),
+                crushedStockHistory: mergeById(backendState.crushedStockHistory, prev.crushedStockHistory || []),
                 unitMaster: backendState.unitMaster && backendState.unitMaster.length > 0 ? backendState.unitMaster : (prev.unitMaster || DEFAULT_UNITS),
                 currentUser: syncedUser || prev.currentUser,
               };
@@ -377,14 +436,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isInitialLoadDone) return;
 
     const timeout = setTimeout(() => {
+      const { currentUser, ...dataToSync } = state;
+      const serialized = JSON.stringify(dataToSync);
+
+      // Prevent redundant sync loop if payload has not changed and no deletions pending
+      if (lastSyncedDataRef.current === serialized && Object.keys(deletedItemsRef.current).length === 0) {
+        return;
+      }
+
       try {
         localStorage.setItem('edamari_data', JSON.stringify(state));
       } catch (err) {
         console.warn('Failed to save to localStorage:', err);
       }
-
-      const { currentUser, ...dataToSync } = state;
-      const serialized = JSON.stringify(dataToSync);
 
       // Broadcast state update to other tabs
       try {
@@ -393,11 +457,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           payload: dataToSync,
         });
       } catch {}
-
-      // Prevent redundant sync loop if payload has not changed
-      if (lastSyncedDataRef.current === serialized && Object.keys(deletedItemsRef.current).length === 0) {
-        return;
-      }
 
       const payload = {
         ...dataToSync,
@@ -423,7 +482,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state.workEntries, state.attendances, state.materialSettings,
     state.suppliers, state.vehicles, state.vehicleMaintenance, state.materialRequests,
     state.labourTypes, state.paymentStageMaster, state.unitMaster, state.materialRentals,
-    state.stageCompletionRequests, isInitialLoadDone
+    state.stageCompletionRequests, state.storeRoomDispatches, isInitialLoadDone
   ]);
 
   const clearAllData = async () => {
@@ -433,6 +492,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.warn('Could not clear backend data:', err);
     }
     localStorage.removeItem('edamari_data');
+    localStorage.removeItem('edamari_deleted_ids');
     localStorage.removeItem('edamari_payroll_paid');
     localStorage.removeItem('edamari_payroll_history');
     setState({ ...defaultState, currentUser: state.currentUser });
@@ -442,9 +502,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const backendState = await api.fetchAppState();
       if (backendState) {
-        const { currentUser: _, ...dataOnly } = backendState;
+        const deletedIds = getDeletedIds();
+        const sanitized: any = { ...backendState };
+        for (const key of Object.keys(sanitized)) {
+          if (Array.isArray(sanitized[key])) {
+            sanitized[key] = sanitized[key].filter((item: any) => !item?.id || !deletedIds.has(item.id));
+          }
+        }
+        const { currentUser: _, ...dataOnly } = sanitized;
         lastSyncedDataRef.current = JSON.stringify(dataOnly);
-        setState(prev => ({ ...prev, ...backendState, currentUser: prev.currentUser }));
+        setState(prev => ({ ...prev, ...sanitized, currentUser: prev.currentUser }));
         setIsBackendConnected(true);
       }
     } catch (err) {
@@ -460,12 +527,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
         channel = new BroadcastChannel('jgs_multi_tab_sync');
         syncChannelRef.current = channel;
         channel.onmessage = (event) => {
+          if (event.data?.type === 'ITEM_DELETED' && event.data.resource && event.data.id) {
+            const { resource, id } = event.data;
+            recordDeletedId(id);
+            setState(prev => {
+              const currentList = (prev as any)[resource];
+              if (Array.isArray(currentList)) {
+                const filtered = currentList.filter((item: any) => item.id !== id);
+                const updated = { ...prev, [resource]: filtered };
+                try {
+                  localStorage.setItem('edamari_data', JSON.stringify(updated));
+                } catch {}
+                return updated;
+              }
+              return prev;
+            });
+            return;
+          }
+
           if (event.data?.type === 'STATE_UPDATE' && event.data.payload) {
             const payload = event.data.payload;
-            lastSyncedDataRef.current = JSON.stringify(payload);
+            const serialized = JSON.stringify(payload);
+            if (lastSyncedDataRef.current === serialized) return;
+            lastSyncedDataRef.current = serialized;
+            const deletedIds = getDeletedIds();
+            const sanitizedPayload: any = { ...payload };
+            for (const key of Object.keys(sanitizedPayload)) {
+              if (Array.isArray(sanitizedPayload[key])) {
+                sanitizedPayload[key] = sanitizedPayload[key].filter((item: any) => !item?.id || !deletedIds.has(item.id));
+              }
+            }
             setState(prev => ({
               ...prev,
-              ...payload,
+              ...sanitizedPayload,
               currentUser: prev.currentUser, // Keep this tab's own user!
             }));
           }
@@ -476,11 +570,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'edamari_deleted_ids') {
+        const deletedIds = getDeletedIds();
+        setState(prev => {
+          let changed = false;
+          const next: any = { ...prev };
+          for (const key of Object.keys(next)) {
+            if (Array.isArray(next[key])) {
+              const filtered = next[key].filter((item: any) => !item?.id || !deletedIds.has(item.id));
+              if (filtered.length !== next[key].length) {
+                next[key] = filtered;
+                changed = true;
+              }
+            }
+          }
+          return changed ? next : prev;
+        });
+        return;
+      }
+
       if (e.key === 'edamari_data' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
           const { currentUser: _, ...dataOnly } = parsed;
-          lastSyncedDataRef.current = JSON.stringify(dataOnly);
+          const serialized = JSON.stringify(dataOnly);
+          if (lastSyncedDataRef.current === serialized) return;
+          lastSyncedDataRef.current = serialized;
+          const deletedIds = getDeletedIds();
+          for (const key of Object.keys(parsed)) {
+            if (Array.isArray(parsed[key])) {
+              parsed[key] = parsed[key].filter((item: any) => !item?.id || !deletedIds.has(item.id));
+            }
+          }
           setState(prev => ({
             ...prev,
             ...parsed,
@@ -552,13 +673,64 @@ export function AppProvider({ children }: { children: ReactNode }) {
     deletedItemsRef.current[resourceKey].push(id);
   };
 
+  const resourceEndpointMap: Record<string, string> = {
+    staffList: 'staff',
+    sites: 'sites',
+    customers: 'customers',
+    products: 'products',
+    quotations: 'quotations',
+    manualExpenses: 'expenses',
+    vendors: 'vendors',
+    workEntries: 'work-entries',
+    dailyLogs: 'daily-logs',
+    attendances: 'attendances',
+    materialSettings: 'material-settings',
+    materialRentals: 'material-rentals',
+    suppliers: 'suppliers',
+    vehicles: 'vehicles',
+    vehicleMaintenance: 'vehicle-maintenance',
+    materialRequests: 'material-requests',
+  };
+
+  const executeResourceDeletion = (resourceKey: keyof AppState, id: string) => {
+    recordDeletedId(id);
+    markDeleted(resourceKey as string, id);
+
+    setState(prev => {
+      const currentList = prev[resourceKey];
+      if (Array.isArray(currentList)) {
+        const filtered = (currentList as any[]).filter(item => item.id !== id);
+        const updated = { ...prev, [resourceKey]: filtered };
+        try {
+          localStorage.setItem('edamari_data', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      }
+      return prev;
+    });
+
+    try {
+      syncChannelRef.current?.postMessage({
+        type: 'ITEM_DELETED',
+        resource: resourceKey,
+        id
+      });
+    } catch {}
+
+    const endpoint = resourceEndpointMap[resourceKey as string];
+    if (endpoint) {
+      api.remove(endpoint, id).catch(err => {
+        console.warn(`Direct backend deletion failed for ${endpoint}/${id}:`, err);
+      });
+    }
+  };
+
   const addStaff = (staff: Omit<Staff, 'id'>) => {
     const id = 'staff_' + Date.now();
     setState(s => ({ ...s, staffList: [...s.staffList, { ...staff, id }] }));
   };
   const deleteStaff = (id: string) => {
-    markDeleted('staffList', id);
-    setState(s => ({ ...s, staffList: s.staffList.filter(x => x.id !== id) }));
+    executeResourceDeletion('staffList', id);
   };
   const updateStaff = (id: string, updates: Partial<Staff>) =>
     setState(s => {
@@ -585,8 +757,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, sites: [...s.sites, { ...site, id }] }));
   };
   const deleteSite = (id: string) => {
-    markDeleted('sites', id);
-    setState(s => ({ ...s, sites: s.sites.filter(x => x.id !== id) }));
+    executeResourceDeletion('sites', id);
   };
   const updateSite = (id: string, updates: Partial<Site>) =>
     setState(s => ({ ...s, sites: s.sites.map(x => x.id === id ? { ...x, ...updates } : x) }));
@@ -690,8 +861,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, customers: [...s.customers, { ...customer, id, createdAt: new Date().toISOString() }] }));
   };
   const deleteCustomer = (id: string) => {
-    markDeleted('customers', id);
-    setState(s => ({ ...s, customers: s.customers.filter(x => x.id !== id) }));
+    executeResourceDeletion('customers', id);
   };
   const updateCustomer = (id: string, updates: Partial<Customer>) =>
     setState(s => ({ ...s, customers: s.customers.map(x => x.id === id ? { ...x, ...updates } : x) }));
@@ -701,8 +871,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, products: [...s.products, { ...product, id }] }));
   };
   const deleteProduct = (id: string) => {
-    markDeleted('products', id);
-    setState(s => ({ ...s, products: s.products.filter(x => x.id !== id) }));
+    executeResourceDeletion('products', id);
   };
 
   const addQuotation = (quotation: Omit<Quotation, 'id' | 'quotationNumber' | 'createdAt'>) => {
@@ -713,8 +882,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateQuotation = (id: string, updates: Partial<Quotation>) =>
     setState(s => ({ ...s, quotations: s.quotations.map(x => x.id === id ? { ...x, ...updates } : x) }));
   const deleteQuotation = (id: string) => {
-    markDeleted('quotations', id);
-    setState(s => ({ ...s, quotations: s.quotations.filter(x => x.id !== id) }));
+    executeResourceDeletion('quotations', id);
   };
 
   const addExpense = (expense: Omit<import('@/types').ManualExpense, 'id'>) => {
@@ -722,8 +890,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, manualExpenses: [...(s.manualExpenses || []), { ...expense, id }] }));
   };
   const deleteExpense = (id: string) => {
-    markDeleted('manualExpenses', id);
-    setState(s => ({ ...s, manualExpenses: (s.manualExpenses || []).filter(x => x.id !== id) }));
+    executeResourceDeletion('manualExpenses', id);
   };
 
   const addVendor = (vendor: Omit<Vendor, 'id'>) => {
@@ -731,8 +898,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, vendors: [...s.vendors, { ...vendor, id }] }));
   };
   const deleteVendor = (id: string) => {
-    markDeleted('vendors', id);
-    setState(s => ({ ...s, vendors: s.vendors.filter(x => x.id !== id) }));
+    executeResourceDeletion('vendors', id);
   };
 
   const addWorkEntry = (entry: Omit<WorkEntry, 'id'>) => {
@@ -745,50 +911,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const exists = s.attendances.find(a => a.staffId === data.staffId && a.date === data.date);
       let updatedAttendances: Attendance[];
       const attId = exists?.id || data.id || `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      if (exists) {
-        updatedAttendances = s.attendances.map(a => a.id === exists.id ? { ...a, ...data, id: exists.id } : a);
-      } else {
-        updatedAttendances = [{ ...data, id: attId }, ...s.attendances];
+
+      // Default supervisor expense status to 'pending' if an expense amount is logged and not yet paid/rejected
+      const effectiveExpenseAmount = data.expenseAmount !== undefined ? data.expenseAmount : (exists?.expenseAmount || 0);
+      let effectiveExpenseStatus = data.expenseStatus || exists?.expenseStatus;
+      if (effectiveExpenseAmount > 0 && !effectiveExpenseStatus) {
+        effectiveExpenseStatus = 'pending';
       }
 
-      // Automatically sync supervisor attendance expense to site's manualExpenses
-      const expId = `att_exp_${data.staffId}_${data.date}`;
-      const effectiveSiteId = data.siteId || (exists ? exists.siteId : undefined);
-      const effectiveExpense = data.expenseAmount !== undefined ? data.expenseAmount : (exists?.expenseAmount || 0);
-      const effectiveNotes = data.expenseNotes !== undefined ? data.expenseNotes : (exists?.expenseNotes || '');
+      const mergedRecord: Attendance = {
+        ...(exists || {}),
+        ...data,
+        id: attId,
+        expenseStatus: effectiveExpenseStatus,
+      };
 
+      if (exists) {
+        updatedAttendances = s.attendances.map(a => a.id === exists.id ? mergedRecord : a);
+      } else {
+        updatedAttendances = [mergedRecord, ...s.attendances];
+      }
+
+      // DO NOT automatically book unverified supervisor expenses to site finances/reports!
+      // Only keep in manualExpenses IF it has already been verified and paid by Admin
+      const expId = `att_exp_${data.staffId}_${data.date}`;
       let newManualExpenses = [...(s.manualExpenses || [])];
-      if (effectiveSiteId && effectiveExpense > 0) {
+      if (effectiveExpenseStatus !== 'paid') {
+        newManualExpenses = newManualExpenses.filter(e => e.id !== expId);
+      } else if (effectiveExpenseAmount > 0) {
+        // Update the existing paid expense record if paid
         const staffObj = s.staffList.find(st => st.id === data.staffId);
         const staffName = staffObj?.name || 'Supervisor';
-        const siteObj = s.sites.find(st => st.id === effectiveSiteId);
-        const siteName = siteObj?.name || data.siteName || 'Site';
+        const siteId = mergedRecord.siteId || '';
+        const siteObj = s.sites.find(st => st.id === siteId);
+        const siteName = siteObj?.name || mergedRecord.siteName || 'Site';
+        const notes = mergedRecord.expenseNotes || '';
 
         const activeStage = siteObj?.paymentStages?.find(ps => ps.completionStatus === 'in_progress')
-          || siteObj?.paymentStages?.find(ps => ps.completionStatus !== 'completed')
           || siteObj?.paymentStages?.[0];
-
-        const effectivePaymentMethod = data.expensePaymentMethod !== undefined ? data.expensePaymentMethod : (exists?.expensePaymentMethod || 'Cash');
 
         const expItem: ManualExpense = {
           id: expId,
-          siteId: effectiveSiteId,
+          siteId: siteId,
           siteName: siteName,
           date: data.date,
-          amount: effectiveExpense,
+          amount: mergedRecord.expensePaidAmount || effectiveExpenseAmount,
           category: 'Supervisor Attendance Expense',
-          description: effectiveNotes ? `${effectiveNotes} (${staffName})` : `Supervisor Attendance Expense - ${staffName}`,
+          description: `Supervisor Expense (Paid): ${notes ? `${notes} - ` : ''}Reimbursed to ${staffName}`,
           workLevelStage: activeStage?.stageName || '',
-          paymentMethod: effectivePaymentMethod
+          paymentMethod: mergedRecord.expensePaymentMethod || 'Cash'
         };
-        const existsExpIndex = newManualExpenses.findIndex(e => e.id === expId);
-        if (existsExpIndex >= 0) {
-          newManualExpenses[existsExpIndex] = expItem;
+
+        const idx = newManualExpenses.findIndex(e => e.id === expId);
+        if (idx >= 0) {
+          newManualExpenses[idx] = expItem;
         } else {
           newManualExpenses.push(expItem);
         }
-      } else {
-        newManualExpenses = newManualExpenses.filter(e => e.id !== expId);
       }
 
       return {
@@ -796,6 +975,200 @@ export function AppProvider({ children }: { children: ReactNode }) {
         attendances: updatedAttendances,
         manualExpenses: newManualExpenses
       };
+    });
+  };
+
+  const submitSupervisorExpenseClaim = (data: {
+    staffId: string;
+    date: string;
+    amount: number;
+    notes?: string;
+    paymentMethod?: string;
+    siteId?: string;
+    siteName?: string;
+  }) => {
+    setState(s => {
+      const existingAtt = (s.attendances || []).find(a => a.staffId === data.staffId && a.date === data.date);
+      const attId = existingAtt?.id || `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const siteObj = data.siteId ? s.sites.find(st => st.id === data.siteId) : undefined;
+      const siteName = siteObj?.name || data.siteName || existingAtt?.siteName || 'General / Supervisor Expense';
+
+      const updatedAtt: Attendance = {
+        ...(existingAtt || { staffId: data.staffId, date: data.date, status: 'present' }),
+        id: attId,
+        siteId: data.siteId || existingAtt?.siteId || '',
+        siteName: siteName,
+        expenseAmount: data.amount,
+        expenseNotes: data.notes || '',
+        expensePaymentMethod: data.paymentMethod || 'Cash',
+        expenseStatus: 'pending',
+      };
+
+      const updatedAttendances = existingAtt
+        ? s.attendances.map(a => a.id === existingAtt.id ? updatedAtt : a)
+        : [updatedAtt, ...s.attendances];
+
+      // Purge from manualExpenses until Admin verifies and pays
+      const expId = `att_exp_${data.staffId}_${data.date}`;
+      const newManualExpenses = (s.manualExpenses || []).filter(e => e.id !== expId);
+
+      const updatedState = {
+        ...s,
+        attendances: updatedAttendances,
+        manualExpenses: newManualExpenses,
+      };
+
+      try {
+        localStorage.setItem('edamari_data', JSON.stringify(updatedState));
+      } catch {}
+
+      return updatedState;
+    });
+  };
+
+  const deleteSupervisorExpenseClaim = (staffId: string, date: string) => {
+    const expId = `att_exp_${staffId}_${date}`;
+    // Permanently delete any associated manualExpense
+    executeResourceDeletion('manualExpenses', expId);
+
+    const existingAtt = (state.attendances || []).find(a => a.staffId === staffId && a.date === date);
+    if (!existingAtt) return;
+
+    const hasActualAttendance = !!(
+      existingAtt.isSubmitted ||
+      existingAtt.inTime ||
+      existingAtt.outTime ||
+      (existingAtt.otHours && existingAtt.otHours > 0) ||
+      (existingAtt.manCount && existingAtt.manCount > 0) ||
+      (existingAtt.siteAssignments && existingAtt.siteAssignments.length > 0) ||
+      (existingAtt.presentCounts && Object.values(existingAtt.presentCounts).some(v => Number(v) > 0)) ||
+      (existingAtt.halfDayCounts && Object.values(existingAtt.halfDayCounts).some(v => Number(v) > 0))
+    );
+
+    if (!hasActualAttendance) {
+      // The attendance record was created purely as a shell for the claim. Delete it completely!
+      executeResourceDeletion('attendances', existingAtt.id);
+    } else {
+      // Real attendance exists: zero out all expense fields explicitly and persist
+      const updatedAtt: Attendance = {
+        ...existingAtt,
+        expenseAmount: 0,
+        expenseNotes: '',
+        expensePaymentMethod: '',
+        expenseStatus: '',
+        expensePaidAmount: 0,
+        expensePaidAt: '',
+        expenseVerifiedBy: '',
+        expenseRejectionReason: '',
+      };
+      saveAttendance(updatedAtt);
+    }
+  };
+
+  const verifyAndPaySupervisorExpense = (
+    staffId: string,
+    date: string,
+    options?: { paidAmount?: number; paymentMethod?: string; notes?: string }
+  ) => {
+    setState(s => {
+      const existingAtt = (s.attendances || []).find(a => a.staffId === staffId && a.date === date);
+      const attId = existingAtt?.id || `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const baseAtt: Attendance = existingAtt || {
+        id: attId,
+        staffId,
+        date,
+        status: 'present',
+      };
+
+      const staffObj = s.staffList.find(st => st.id === staffId);
+      const staffName = staffObj?.name || 'Supervisor';
+      const siteId = baseAtt.siteId || '';
+      const siteObj = s.sites.find(st => st.id === siteId);
+      const siteName = siteObj?.name || baseAtt.siteName || 'Site';
+      const finalPaidAmount = options?.paidAmount !== undefined ? options.paidAmount : (baseAtt.expenseAmount || 0);
+      const finalMethod = options?.paymentMethod || baseAtt.expensePaymentMethod || 'Cash';
+      const finalNotes = options?.notes !== undefined ? options.notes : (baseAtt.expenseNotes || '');
+
+      const now = format(new Date(), 'yyyy-MM-dd hh:mm a');
+
+      const updatedAtt: Attendance = {
+        ...baseAtt,
+        expenseAmount: baseAtt.expenseAmount || finalPaidAmount,
+        expenseNotes: finalNotes,
+        expenseStatus: 'paid',
+        expensePaidAmount: finalPaidAmount,
+        expensePaidAt: now,
+        expenseVerifiedBy: s.currentUser?.name || 'Admin',
+        expensePaymentMethod: finalMethod,
+      };
+
+      const updatedAttendances = existingAtt
+        ? s.attendances.map(a => (a.staffId === staffId && a.date === date) ? updatedAtt : a)
+        : [updatedAtt, ...s.attendances];
+
+      // Officially add to manualExpenses now that Admin has verified and paid!
+      const expId = `att_exp_${staffId}_${date}`;
+      const activeStage = siteObj?.paymentStages?.find(ps => ps.completionStatus === 'in_progress')
+        || siteObj?.paymentStages?.[0];
+
+      const paidExpItem: ManualExpense = {
+        id: expId,
+        siteId: siteId,
+        siteName: siteName,
+        date: date,
+        amount: finalPaidAmount,
+        category: 'Supervisor Attendance Expense',
+        description: `Supervisor Expense (Verified & Paid): ${finalNotes ? `${finalNotes} - ` : ''}Reimbursed to ${staffName}`,
+        workLevelStage: activeStage?.stageName || '',
+        paymentMethod: finalMethod
+      };
+
+      const filteredExpenses = (s.manualExpenses || []).filter(e => e.id !== expId);
+      const newExpenses = finalPaidAmount > 0 ? [paidExpItem, ...filteredExpenses] : filteredExpenses;
+
+      const updatedState = {
+        ...s,
+        attendances: updatedAttendances,
+        manualExpenses: newExpenses
+      };
+
+      try {
+        localStorage.setItem('edamari_data', JSON.stringify(updatedState));
+      } catch {}
+
+      return updatedState;
+    });
+  };
+
+  const rejectSupervisorExpense = (staffId: string, date: string, reason?: string) => {
+    setState(s => {
+      const existingAtt = (s.attendances || []).find(a => a.staffId === staffId && a.date === date);
+      if (!existingAtt) return s;
+
+      const updatedAtt: Attendance = {
+        ...existingAtt,
+        expenseStatus: 'rejected',
+        expenseRejectionReason: reason || 'Not approved by Admin',
+      };
+
+      const updatedAttendances = s.attendances.map(a => (a.staffId === staffId && a.date === date) ? updatedAtt : a);
+
+      // Remove from manualExpenses if previously logged
+      const expId = `att_exp_${staffId}_${date}`;
+      const newExpenses = (s.manualExpenses || []).filter(e => e.id !== expId);
+
+      const updatedState = {
+        ...s,
+        attendances: updatedAttendances,
+        manualExpenses: newExpenses
+      };
+
+      try {
+        localStorage.setItem('edamari_data', JSON.stringify(updatedState));
+      } catch {}
+
+      return updatedState;
     });
   };
 
@@ -808,8 +1181,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteMaterialSetting = (id: string) => {
-    markDeleted('materialSettings', id);
-    setState(s => ({ ...s, materialSettings: s.materialSettings.filter(m => m.id !== id) }));
+    executeResourceDeletion('materialSettings', id);
   };
 
   // Suppliers
@@ -824,8 +1196,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteSupplier = (id: string) => {
-    markDeleted('suppliers', id);
-    setState(s => ({ ...s, suppliers: s.suppliers.filter(sup => sup.id !== id) }));
+    executeResourceDeletion('suppliers', id);
   };
 
   // Vehicles
@@ -855,8 +1226,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteVehicle = (id: string) => {
-    markDeleted('vehicles', id);
-    setState(s => ({ ...s, vehicles: (s.vehicles || []).filter(v => v.id !== id) }));
+    executeResourceDeletion('vehicles', id);
   };
 
   // Vehicle Maintenance
@@ -892,28 +1262,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteVehicleMaintenance = (id: string) => {
-    markDeleted('vehicleMaintenance', id);
-    setState(s => ({
-      ...s,
-      vehicleMaintenance: (s.vehicleMaintenance || []).filter(m => m.id !== id)
-    }));
+    executeResourceDeletion('vehicleMaintenance', id);
   };
 
   // Material Requests
-  const addMaterialRequest = (request: Omit<MaterialRequest, 'id' | 'status'>) => {
-    const id = `mr_${Date.now()}`;
+  const addMaterialRequest = (request: Omit<MaterialRequest, 'id' | 'status'> & { id?: string; status?: MaterialRequest['status'] }) => {
+    const id = request.id || `mr_${Date.now()}`;
     const now = new Date();
     setState(s => ({
       ...s,
       materialRequests: [{
         ...request,
         id,
-        status: 'pending',
+        status: request.status || 'pending',
         createdAt: request.createdAt || now.toISOString(),
         date: request.date || format(now, 'yyyy-MM-dd'),
         time: request.time || format(now, 'hh:mm a')
       }, ...s.materialRequests]
     }));
+    return id;
   };
 
   const updateMaterialRequest = (id: string, updates: Partial<MaterialRequest>) => {
@@ -933,11 +1300,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteMaterialRequest = (id: string) => {
-    markDeleted('materialRequests', id);
-    setState(s => ({
-      ...s,
-      materialRequests: s.materialRequests.filter(mr => mr.id !== id)
-    }));
+    executeResourceDeletion('materialRequests', id);
   };
 
   const assignMaterialRequest = (id: string, assignment: {
@@ -959,33 +1322,89 @@ export function AppProvider({ children }: { children: ReactNode }) {
     items?: import('@/types').MaterialRequestItem[];
   }) => {
     const finalVehicle = assignment.vehicle || `${assignment.vehicleType ? `${assignment.vehicleType} - ` : ''}${assignment.vehicleNumber || ''}`;
-    setState(s => ({
-      ...s,
-      materialRequests: s.materialRequests.map(mr => mr.id === id ? {
-        ...mr,
-        ...assignment,
-        items: assignment.items || mr.items,
-        materialCost: assignment.supplierPrice !== undefined ? assignment.supplierPrice : mr.materialCost,
-        vehicle: finalVehicle,
-        vehicleNumber: assignment.vehicleNumber || assignment.vehicle,
-        vehicleType: assignment.vehicleType,
-        startTime: assignment.startTime || mr.startTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        supplierPrice: assignment.supplierPrice !== undefined ? assignment.supplierPrice : mr.supplierPrice,
-        supplierPaidAmount: assignment.supplierPaidAmount !== undefined ? assignment.supplierPaidAmount : (mr.supplierPaidAmount || 0),
-        supplierBalance: assignment.supplierBalance !== undefined ? assignment.supplierBalance : (
-          assignment.supplierPrice !== undefined ? Math.max(0, assignment.supplierPrice - (assignment.supplierPaidAmount || mr.supplierPaidAmount || 0)) : mr.supplierBalance
-        ),
-        supplierPayments: assignment.supplierPayments || mr.supplierPayments,
-        status: 'assigned',
-        assignedAt: new Date().toISOString()
-      } : mr)
-    }));
+    setState(s => {
+      const targetReq = s.materialRequests.find(mr => mr.id === id);
+      const isStoreRoom = targetReq?.isStoreRoom || targetReq?.sourceType === 'store_room';
+
+      let updatedMaterialSettings = s.materialSettings;
+      let updatedStoreRoomDispatches = s.storeRoomDispatches;
+
+      // Deduct from store room stock if this request was not previously assigned
+      if (isStoreRoom && targetReq && targetReq.status !== 'assigned' && targetReq.status !== 'completed') {
+        const itemsToDeduct = assignment.items || targetReq.items || [];
+        
+        // 1. Deduct stock from materialSettings
+        updatedMaterialSettings = s.materialSettings.map(mat => {
+          const matchedItem = itemsToDeduct.find(it => it.name.trim().toLowerCase() === mat.name.trim().toLowerCase());
+          if (matchedItem) {
+            const currentStock = mat.stockQuantity ?? 0;
+            const deducted = Math.max(0, currentStock - Number(matchedItem.quantity || 0));
+            return { ...mat, stockQuantity: deducted };
+          }
+          return mat;
+        });
+
+        // 2. Add Store Room Dispatch record for tracking
+        const dispatchDateVal = targetReq.startDate || targetReq.date || format(new Date(), 'yyyy-MM-dd');
+        const newDispatches = itemsToDeduct.map(it => {
+          const mat = s.materialSettings.find(m => m.name.trim().toLowerCase() === it.name.trim().toLowerCase());
+          return {
+            id: crypto.randomUUID(),
+            materialId: mat?.id || `mat_${Date.now()}`,
+            materialName: it.name,
+            category: mat?.category || 'Store Room',
+            siteId: targetReq.siteId,
+            siteName: targetReq.siteName,
+            quantity: Number(it.quantity) || 1,
+            unit: it.unit || 'Units',
+            vehicleId: undefined,
+            vehicleNumber: assignment.vehicleNumber || assignment.vehicle,
+            driverId: assignment.driverId,
+            driverName: assignment.driverName,
+            dispatchedBy: s.currentUser?.name || 'Admin',
+            date: dispatchDateVal,
+            startDate: dispatchDateVal,
+            deliveryDate: dispatchDateVal,
+            time: assignment.startTime || format(new Date(), 'hh:mm a'),
+            status: 'active' as const,
+            notes: targetReq.notes,
+            perDayRate: mat?.rentalRatePerDay || mat?.defaultRate || 0,
+          };
+        });
+        updatedStoreRoomDispatches = [...newDispatches, ...s.storeRoomDispatches];
+      }
+
+      return {
+        ...s,
+        materialSettings: updatedMaterialSettings,
+        storeRoomDispatches: updatedStoreRoomDispatches,
+        materialRequests: s.materialRequests.map(mr => mr.id === id ? {
+          ...mr,
+          ...assignment,
+          items: assignment.items || mr.items,
+          materialCost: assignment.supplierPrice !== undefined ? assignment.supplierPrice : mr.materialCost,
+          vehicle: finalVehicle,
+          vehicleNumber: assignment.vehicleNumber || assignment.vehicle,
+          vehicleType: assignment.vehicleType,
+          startTime: assignment.startTime || mr.startTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          supplierPrice: assignment.supplierPrice !== undefined ? assignment.supplierPrice : mr.supplierPrice,
+          supplierPaidAmount: assignment.supplierPaidAmount !== undefined ? assignment.supplierPaidAmount : (mr.supplierPaidAmount || 0),
+          supplierBalance: assignment.supplierBalance !== undefined ? assignment.supplierBalance : (
+            assignment.supplierPrice !== undefined ? Math.max(0, assignment.supplierPrice - (assignment.supplierPaidAmount || mr.supplierPaidAmount || 0)) : mr.supplierBalance
+          ),
+          supplierPayments: assignment.supplierPayments || mr.supplierPayments,
+          status: 'assigned',
+          assignedAt: new Date().toISOString()
+        } : mr)
+      };
+    });
   };
 
   const completeMaterialRequest = (id: string, completion: {
     startTime?: string;
     endTime?: string;
     completionTime?: string;
+    deliveryDate?: string;
     duration?: string;
     durationHours?: number;
     driverWage?: number;
@@ -1082,9 +1501,83 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      const effectiveDelDate = completion.deliveryDate || targetReq?.deliveryDate || format(new Date(), 'yyyy-MM-dd');
+
+      const isStoreRoomReq = targetReq?.isStoreRoom || targetReq?.sourceType === 'store_room';
+      let updatedStoreRoomDispatches = s.storeRoomDispatches;
+      let updatedMaterialSettings = s.materialSettings;
+
+      if (isStoreRoomReq && targetReq) {
+        const finalItems = completion.items || targetReq.items || [];
+
+        // Deduct from materialSettings if this request was not previously deducted during assignment
+        if (targetReq.status !== 'assigned' && targetReq.status !== 'completed') {
+          updatedMaterialSettings = s.materialSettings.map(mat => {
+            const matchedItem = finalItems.find(it => it.name.trim().toLowerCase() === mat.name.trim().toLowerCase());
+            if (matchedItem) {
+              const currentStock = mat.stockQuantity ?? 0;
+              const deducted = Math.max(0, currentStock - Number(matchedItem.quantity || 0));
+              return { ...mat, stockQuantity: deducted };
+            }
+            return mat;
+          });
+        }
+
+        // Check if an active dispatch already exists
+        const hasExistingDispatch = updatedStoreRoomDispatches.some(disp =>
+          disp.siteId === targetReq.siteId &&
+          disp.status === 'active' &&
+          finalItems.some(it => it.name.toLowerCase() === disp.materialName.toLowerCase())
+        );
+
+        if (hasExistingDispatch) {
+          updatedStoreRoomDispatches = updatedStoreRoomDispatches.map(disp => {
+            if (disp.siteId === targetReq.siteId && disp.status === 'active') {
+              const matchesMat = finalItems.some(it => it.name.toLowerCase() === disp.materialName.toLowerCase());
+              if (matchesMat) {
+                return {
+                  ...disp,
+                  deliveryDate: effectiveDelDate
+                };
+              }
+            }
+            return disp;
+          });
+        } else {
+          // If no active dispatch exists yet, create it so it immediately appears in "Active at Sites"
+          const newDispatches = finalItems.map(it => {
+            const mat = s.materialSettings.find(m => m.name.trim().toLowerCase() === it.name.trim().toLowerCase());
+            return {
+              id: crypto.randomUUID(),
+              materialId: mat?.id || `mat_${Date.now()}`,
+              materialName: it.name,
+              category: mat?.category || 'Store Room',
+              siteId: targetReq.siteId,
+              siteName: targetReq.siteName,
+              quantity: Number(it.quantity) || 1,
+              unit: it.unit || 'Units',
+              vehicleNumber: targetReq.vehicleNumber || targetReq.vehicle,
+              driverId: targetReq.driverId,
+              driverName: targetReq.driverName,
+              dispatchedBy: s.currentUser?.name || 'Admin',
+              date: effectiveDelDate,
+              startDate: targetReq.startDate || targetReq.date || effectiveDelDate,
+              deliveryDate: effectiveDelDate,
+              time: targetReq.time || format(new Date(), 'hh:mm a'),
+              status: 'active' as const,
+              notes: targetReq.notes,
+              perDayRate: mat?.rentalRatePerDay || mat?.defaultRate || 0,
+            };
+          });
+          updatedStoreRoomDispatches = [...newDispatches, ...updatedStoreRoomDispatches];
+        }
+      }
+
       return {
         ...s,
         dailyLogs: updatedLogs,
+        materialSettings: updatedMaterialSettings,
+        storeRoomDispatches: updatedStoreRoomDispatches,
         materialRequests: s.materialRequests.map(mr => {
           if (mr.id !== id) return mr;
           const finalStart = completion.startTime || mr.startTime || '';
@@ -1107,6 +1600,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return {
             ...mr,
             ...completion,
+            deliveryDate: effectiveDelDate,
             items: finalItems,
             materialCost: computedMaterialCost,
             driverWage: finalDriverWage,
@@ -1172,6 +1666,64 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const addStoreRoomDispatch = (dispatch: Omit<StoreRoomDispatchRecord, 'id' | 'createdAt'>) => {
+    const id = `srd_${Date.now()}`;
+    const now = new Date();
+    setState(s => ({
+      ...s,
+      storeRoomDispatches: [{
+        ...dispatch,
+        id,
+        createdAt: now.toISOString(),
+      }, ...(s.storeRoomDispatches || [])]
+    }));
+  };
+
+  const updateStoreRoomDispatch = (id: string, updates: Partial<StoreRoomDispatchRecord>) => {
+    setState(s => ({
+      ...s,
+      storeRoomDispatches: (s.storeRoomDispatches || []).map(d =>
+        d.id === id ? { ...d, ...updates } : d
+      )
+    }));
+  };
+
+  const addCrushedStockRecord = (record: Omit<CrushedStockRecord, 'id' | 'createdAt'>) => {
+    const id = `csh_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const now = new Date();
+    setState(s => ({
+      ...s,
+      crushedStockHistory: [{
+        ...record,
+        id,
+        createdAt: now.toISOString(),
+      }, ...(s.crushedStockHistory || [])]
+    }));
+  };
+
+  const deleteCrushedStockRecord = (id: string) => {
+    executeResourceDeletion('crushedStockHistory', id);
+  };
+
+  const restoreCrushedStockRecord = (id: string) => {
+    setState(s => {
+      const record = (s.crushedStockHistory || []).find(c => c.id === id);
+      if (!record) return s;
+      const updatedMat = (s.materialSettings || []).map(m => {
+        if ((record.materialId && m.id === record.materialId) || m.name.toLowerCase() === record.materialName.toLowerCase()) {
+          return { ...m, stockQuantity: (m.stockQuantity || 0) + (record.crushedQuantity || 0) };
+        }
+        return m;
+      });
+      markDeleted('crushedStockHistory', id);
+      return {
+        ...s,
+        materialSettings: updatedMat,
+        crushedStockHistory: (s.crushedStockHistory || []).filter(c => c.id !== id)
+      };
+    });
+  };
+
   const addStageCompletionRequest = (request: Omit<StageCompletionRequest, 'id'>) => {
     const newRequest: StageCompletionRequest = {
       ...request,
@@ -1210,11 +1762,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteMaterialRental = (id: string) => {
-    markDeleted('materialRentals', id);
-    setState(s => ({
-      ...s,
-      materialRentals: (s.materialRentals || []).filter(r => r.id !== id)
-    }));
+    executeResourceDeletion('materialRentals', id);
   };
 
   return (
@@ -1233,6 +1781,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addVendor, deleteVendor,
       addWorkEntry,
       saveAttendance,
+      submitSupervisorExpenseClaim,
+      deleteSupervisorExpenseClaim,
+      verifyAndPaySupervisorExpense,
+      rejectSupervisorExpense,
       addMaterialSetting, updateMaterialSetting, deleteMaterialSetting,
       materialRentals: state.materialRentals || [],
       addMaterialRental, updateMaterialRental, deleteMaterialRental,
@@ -1247,6 +1799,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addPaymentStageMaster, removePaymentStageMaster,
       stageCompletionRequests: state.stageCompletionRequests || [],
       addStageCompletionRequest, updateStageCompletionRequest,
+      storeRoomDispatches: state.storeRoomDispatches || [],
+      addStoreRoomDispatch, updateStoreRoomDispatch,
+      crushedStockHistory: state.crushedStockHistory || [],
+      addCrushedStockRecord, deleteCrushedStockRecord, restoreCrushedStockRecord,
       currentPortal, switchPortal,
       isBackendConnected, clearAllData, refreshFromBackend,
     }}>

@@ -8,7 +8,8 @@ from .models import (
     Staff, Site, Customer, Product, Quotation, ManualExpense,
     Vendor, WorkEntry, DailyLog, Attendance, MaterialSetting,
     MaterialRental, Supplier, Vehicle, VehicleMaintenance, MaterialRequest,
-    PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest
+    PayrollPaidStatus, PayrollHistory, AppConfig, StageCompletionRequest,
+    StoreRoomDispatch
 )
 from .serializers import (
     StaffSerializer, SiteSerializer, CustomerSerializer,
@@ -18,7 +19,8 @@ from .serializers import (
     MaterialRentalSerializer, SupplierSerializer, VehicleSerializer,
     VehicleMaintenanceSerializer,
     MaterialRequestSerializer, PayrollPaidStatusSerializer,
-    PayrollHistorySerializer, AppConfigSerializer, StageCompletionRequestSerializer
+    PayrollHistorySerializer, AppConfigSerializer, StageCompletionRequestSerializer,
+    StoreRoomDispatchSerializer
 )
 
 
@@ -101,12 +103,14 @@ def sync_app_state(request):
         vehicle_maintenance = to_camel_dict(VehicleMaintenanceSerializer(VehicleMaintenance.objects.all(), many=True).data)
         material_requests = to_camel_dict(MaterialRequestSerializer(MaterialRequest.objects.all(), many=True).data)
         stage_completion_requests = to_camel_dict(StageCompletionRequestSerializer(StageCompletionRequest.objects.all(), many=True).data)
+        store_room_dispatches = to_camel_dict(StoreRoomDispatchSerializer(StoreRoomDispatch.objects.all(), many=True).data)
         payroll_paid_status = to_camel_dict(PayrollPaidStatusSerializer(PayrollPaidStatus.objects.all(), many=True).data)
         payroll_history = to_camel_dict(PayrollHistorySerializer(PayrollHistory.objects.all(), many=True).data)
 
         labour_types_cfg = AppConfig.objects.filter(key='labourTypes').first()
         payment_stages_cfg = AppConfig.objects.filter(key='paymentStageMaster').first()
         units_cfg = AppConfig.objects.filter(key='unitMaster').first()
+        crushed_stock_cfg = AppConfig.objects.filter(key='crushedStockHistory').first()
 
         labour_types = labour_types_cfg.value.get('items', []) if labour_types_cfg else ['painter', 'plumber', 'electrician', 'labour']
         payment_stage_master = payment_stages_cfg.value.get('items', []) if payment_stages_cfg else [
@@ -115,6 +119,7 @@ def sync_app_state(request):
         unit_master = units_cfg.value.get('items', []) if units_cfg else [
             'Kg', 'Tons', 'Bags', 'Liters', 'Nos', 'Sets', 'Sq.Ft', 'Boxes', 'Meters', 'Loads', 'Units'
         ]
+        crushed_stock_history = crushed_stock_cfg.value.get('items', []) if crushed_stock_cfg else []
 
         return Response({
             "staffList": staff,
@@ -134,6 +139,8 @@ def sync_app_state(request):
             "materialRequests": material_requests,
             "materialRentals": material_rentals,
             "stageCompletionRequests": stage_completion_requests,
+            "storeRoomDispatches": store_room_dispatches,
+            "crushedStockHistory": crushed_stock_history,
             "labourTypes": labour_types,
             "paymentStageMaster": payment_stage_master,
             "unitMaster": unit_master,
@@ -199,7 +206,8 @@ def sync_app_state(request):
                     'materialRentals': MaterialRental, 'suppliers': Supplier,
                     'vehicles': Vehicle, 'vehicleMaintenance': VehicleMaintenance,
                     'materialRequests': MaterialRequest,
-                    'stageCompletionRequests': StageCompletionRequest
+                    'stageCompletionRequests': StageCompletionRequest,
+                    'storeRoomDispatches': StoreRoomDispatch
                 }
                 for res_key, ids in deleted_map.items():
                     m_class = resource_model_map.get(res_key)
@@ -240,6 +248,8 @@ def sync_app_state(request):
                 upsert_items(MaterialRequest, data['materialRequests'])
             if 'stageCompletionRequests' in data:
                 upsert_items(StageCompletionRequest, data['stageCompletionRequests'])
+            if 'storeRoomDispatches' in data:
+                upsert_items(StoreRoomDispatch, data['storeRoomDispatches'])
             if 'payrollPaidStatus' in data:
                 upsert_items(PayrollPaidStatus, data['payrollPaidStatus'], id_field='key')
             if 'payrollHistory' in data:
@@ -251,6 +261,8 @@ def sync_app_state(request):
                 AppConfig.objects.update_or_create(key='paymentStageMaster', defaults={'value': {'items': data['paymentStageMaster']}})
             if 'unitMaster' in data and isinstance(data['unitMaster'], list):
                 AppConfig.objects.update_or_create(key='unitMaster', defaults={'value': {'items': data['unitMaster']}})
+            if 'crushedStockHistory' in data and isinstance(data['crushedStockHistory'], list):
+                AppConfig.objects.update_or_create(key='crushedStockHistory', defaults={'value': {'items': data['crushedStockHistory']}})
 
         return Response({"message": "State synchronized successfully"}, status=status.HTTP_200_OK)
 

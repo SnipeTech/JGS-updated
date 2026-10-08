@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import {
   LogOut, Send, Package,
-  Clock, Users, CalendarDays, Wallet
+  Clock, Users, CalendarDays, Wallet, Receipt
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -13,13 +13,24 @@ import { MaterialRequestTab } from './Staff/MaterialRequestTab';
 import { WorkHistoryTab } from './Staff/WorkHistoryTab';
 import { ThisWeekTab } from './Staff/ThisWeekTab';
 import { StaffAttendanceTab } from './Staff/StaffAttendanceTab';
+import { SupervisorExpensesTab } from './Staff/SupervisorExpensesTab';
 import { MySalaryTab } from './Staff/MySalaryTab';
 
 const StaffDashboard = () => {
   const { logout, currentUser, staffList, sites, dailyLogs, attendances } = useApp();
   const staff = staffList.find(s => s.id === currentUser?.id) || staffList.find(s => s.role === 'supervisor') || staffList[0];
   const [activeLanguage, setActiveLanguage] = useState<'en' | 'ta' | 'hi'>('en');
-  const [activeSection, setActiveSection] = useState<'log' | 'material_request' | 'history' | 'week' | 'team_attendance' | 'salary'>('log');
+  type StaffSection = 'log' | 'material_request' | 'history' | 'week' | 'team_attendance' | 'supervisor_expenses' | 'salary';
+  const [activeSection, setActiveSectionState] = useState<StaffSection>(() => {
+    const saved = sessionStorage.getItem('jgs_staff_active_section') as StaffSection | null;
+    const validSections: StaffSection[] = ['log', 'material_request', 'history', 'week', 'team_attendance', 'supervisor_expenses', 'salary'];
+    return (saved && validSections.includes(saved)) ? saved : 'log';
+  });
+
+  const setActiveSection = (section: StaffSection) => {
+    sessionStorage.setItem('jgs_staff_active_section', section);
+    setActiveSectionState(section);
+  };
   const [activeSiteForMaterial, setActiveSiteForMaterial] = useState<string>('');
 
   useEffect(() => {
@@ -87,6 +98,15 @@ const StaffDashboard = () => {
   const today = format(new Date(), 'yyyy-MM-dd');
   const myTodayLogs = dailyLogs.filter(l => l.staffId === currentUser?.id && l.date === today);
 
+  const pendingExpenseClaimsCount = useMemo(() => {
+    if (!staff?.id) return 0;
+    return (attendances || []).filter(a =>
+      a.staffId === staff.id &&
+      Number(a.expenseAmount) > 0 &&
+      (!a.expenseStatus || a.expenseStatus === 'pending')
+    ).length;
+  }, [attendances, staff?.id]);
+
   return (
     <div className="flex min-h-screen bg-background w-full">
       {/* ── Desktop Luxury Sidebar ── */}
@@ -114,6 +134,7 @@ const StaffDashboard = () => {
             { id: 'history' as const, label: 'Work History', icon: <Clock className="w-4 h-4" />, show: true },
             { id: 'week' as const, label: 'This Week Overview', icon: <CalendarDays className="w-4 h-4" />, show: true },
             { id: 'team_attendance' as const, label: 'Team Attendance', icon: <Users className="w-4 h-4" />, show: isSupervisor },
+            { id: 'supervisor_expenses' as const, label: 'Supervisor Expenses', icon: <Receipt className="w-4 h-4" />, show: isSupervisor, badge: pendingExpenseClaimsCount },
             { id: 'salary' as const, label: 'My Salary & Earnings', icon: <Wallet className="w-4 h-4" />, show: true },
           ].filter(item => item.show).map(item => {
             const isActive = activeSection === item.id;
@@ -132,9 +153,16 @@ const StaffDashboard = () => {
                   </span>
                   <span>{item.label}</span>
                 </div>
-                {isActive && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_hsl(38_78%_50%)]" />
-                )}
+                <div className="flex items-center gap-1.5">
+                  {'badge' in item && typeof item.badge === 'number' && item.badge > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500 text-white animate-pulse shadow-xs">
+                      {item.badge}
+                    </span>
+                  )}
+                  {isActive && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_hsl(38_78%_50%)]" />
+                  )}
+                </div>
               </button>
             );
           })}
@@ -160,7 +188,7 @@ const StaffDashboard = () => {
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-[10px] text-amber-400 font-semibold capitalize truncate">
-                  {staff?.role || 'Staff'}
+                  {staff?.role || 'Staff'} {staff?.phone ? `• 📞 ${staff.phone}` : ''}
                 </span>
               </div>
             </div>
@@ -263,17 +291,21 @@ const StaffDashboard = () => {
               { id: 'history' as const, label: 'History', icon: <Clock className="w-3.5 h-3.5" />, show: true },
               { id: 'week' as const, label: 'Week', icon: <CalendarDays className="w-3.5 h-3.5" />, show: true },
               { id: 'team_attendance' as const, label: 'Team', icon: <Users className="w-3.5 h-3.5" />, show: isSupervisor },
+              { id: 'supervisor_expenses' as const, label: 'Supervisor Exp', icon: <Receipt className="w-3.5 h-3.5" />, show: isSupervisor, badge: pendingExpenseClaimsCount },
               { id: 'salary' as const, label: 'Salary', icon: <Wallet className="w-3.5 h-3.5" />, show: true },
-            ].filter(item => item.show).map(({ id, label, icon }) => (
+            ].filter(item => item.show).map(({ id, label, icon, badge }) => (
               <button
                 key={id}
                 onClick={() => setActiveSection(id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold rounded-xl transition-all whitespace-nowrap shrink-0 ${activeSection === id
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold rounded-xl transition-all whitespace-nowrap shrink-0 relative ${activeSection === id
                     ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-bold shadow-xs'
                     : 'text-zinc-400 hover:text-zinc-200'
                   }`}
               >
                 {icon}{label}
+                {typeof badge === 'number' && badge > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                )}
               </button>
             ))}
           </div>
@@ -295,6 +327,7 @@ const StaffDashboard = () => {
             {activeSection === 'history' && <WorkHistoryTab staff={staff} />}
             {activeSection === 'week' && <ThisWeekTab staff={staff} />}
             {activeSection === 'team_attendance' && <StaffAttendanceTab staff={staff} />}
+            {activeSection === 'supervisor_expenses' && <SupervisorExpensesTab staff={staff} />}
             {activeSection === 'salary' && <MySalaryTab staff={staff} />}
           </main>
         </div>
